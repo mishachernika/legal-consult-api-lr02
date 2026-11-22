@@ -5,9 +5,11 @@ import { reviewModel } from '../models/reviewModel.js';
 import { AppError } from '../utils/AppError.js';
 import { assertValid } from '../utils/validate.js';
 import { parseId } from '../utils/params.js';
+import { parsePagination, paginate } from '../utils/pagination.js';
 
 const SORTABLE = ['rating', 'pricePerHour', 'experienceYears'];
 
+// Каталог юристів: публічний, з пагінацією, пошуком, фільтрами та сортуванням
 export async function getLawyers(req, res) {
   const { specializationId, search, minPrice, maxPrice, sortBy = 'rating', order = 'desc' } = req.query;
 
@@ -27,11 +29,10 @@ export async function getLawyers(req, res) {
     if (maxPrice !== undefined) where.pricePerHour.lte = Number(maxPrice);
   }
 
-  const lawyers = await lawyerModel.findAll({
-    where,
-    orderBy: { [SORTABLE.includes(sortBy) ? sortBy : 'rating']: order === 'asc' ? 'asc' : 'desc' },
-  });
-  res.json({ data: lawyers });
+  const { page, limit, skip, take } = parsePagination(req.query);
+  const orderBy = { [SORTABLE.includes(sortBy) ? sortBy : 'rating']: order === 'asc' ? 'asc' : 'desc' };
+  const { items, total } = await lawyerModel.findPage({ where, skip, take, orderBy });
+  res.json(paginate(items, total, { page, limit }));
 }
 
 export async function getLawyerById(req, res) {
@@ -53,6 +54,7 @@ async function assertSpecializationsExist(specializationIds) {
   }
 }
 
+// Профіль юриста створює сам користувач (або адмін — для будь-кого)
 export async function createLawyer(req, res) {
   assertValid(req.body, {
     userId: ['required', 'positiveInt'],
@@ -71,6 +73,10 @@ export async function createLawyer(req, res) {
     specializationIds = [],
   } = req.body;
 
+  if (req.user.role !== 'ADMIN' && req.user.userId !== userId) {
+    throw new AppError(403, 'Можна створити профіль юриста лише для власного акаунта');
+  }
+
   const user = await userModel.findById(userId);
   if (!user) throw new AppError(404, 'Користувача не знайдено');
 
@@ -84,7 +90,8 @@ export async function createLawyer(req, res) {
     bio,
     experienceYears,
     pricePerHour,
-    isVerified,
+    // верифікацію підтверджує лише адміністратор
+    isVerified: req.user.role === 'ADMIN' ? isVerified : false,
     specializations: { connect: specializationIds.map((id) => ({ id })) },
   });
   // користувач із профілем юриста отримує роль LAWYER
@@ -93,8 +100,18 @@ export async function createLawyer(req, res) {
   res.status(201).json({ data: lawyer });
 }
 
+async function assertCanManageLawyer(req, id) {
+  const lawyer = await lawyerModel.findById(id);
+  if (!lawyer) throw new AppError(404, 'Профіль юриста не знайдено');
+  if (req.user.role !== 'ADMIN' && lawyer.userId !== req.user.userId) {
+    throw new AppError(403, 'Можна керувати лише власним профілем юриста');
+  }
+  return lawyer;
+}
+
 export async function updateLawyer(req, res) {
   const id = parseId(req.params.id, 'ідентифікатор профілю юриста');
+  await assertCanManageLawyer(req, id);
   assertValid(req.body, {
     bio: ['string', ['max', 2000]],
     experienceYears: ['nonNegativeInt'],
@@ -105,6 +122,9 @@ export async function updateLawyer(req, res) {
   const { bio, experienceYears, pricePerHour, isVerified, specializationIds } = req.body ?? {};
   if ([bio, experienceYears, pricePerHour, isVerified, specializationIds].every((v) => v === undefined)) {
     throw new AppError(400, 'Не передано жодного поля для оновлення');
+  }
+  if (isVerified !== undefined && req.user.role !== 'ADMIN') {
+    throw new AppError(403, 'Лише адміністратор може підтверджувати профіль юриста');
   }
   if (specializationIds && specializationIds.length > 0) {
     await assertSpecializationsExist(specializationIds);
@@ -124,7 +144,8 @@ export async function updateLawyer(req, res) {
 
 export async function deleteLawyer(req, res) {
   const id = parseId(req.params.id, 'ідентифікатор профілю юриста');
-  const lawyer = await lawyerModel.remove(id);
+  const lawyer = await assertCanManageLawyer(req, id);
+  await lawyerModel.remove(lawyer.id);
   // без профілю користувач знову стає клієнтом
   await userModel.setRole(lawyer.userId, 'CLIENT');
   res.status(204).end();

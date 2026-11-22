@@ -10,6 +10,14 @@ export const reviewModel = {
   findAll: (where) =>
     prisma.review.findMany({ where, include: reviewInclude, orderBy: { createdAt: 'desc' } }),
 
+  findPage: async (where, { skip, take, orderBy = { createdAt: 'desc' } }) => {
+    const [items, total] = await Promise.all([
+      prisma.review.findMany({ where, skip, take, orderBy, include: reviewInclude }),
+      prisma.review.count({ where }),
+    ]);
+    return { items, total };
+  },
+
   findById: (id) => prisma.review.findUnique({ where: { id }, include: reviewInclude }),
 
   findByLawyer: (lawyerUserId) =>

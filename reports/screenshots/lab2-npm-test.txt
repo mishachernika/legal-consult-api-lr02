@@ -1,0 +1,101 @@
+
+> legal-consult-api@1.0.0 test
+> npm run db:test && NODE_ENV=test node --env-file-if-exists=.env.test --test --test-concurrency=1 "tests/**/*.test.js"
+
+
+> legal-consult-api@1.0.0 db:test
+> NODE_ENV=test prisma migrate deploy && NODE_ENV=test prisma generate
+
+◇ injected env (10) from .env.test
+Loaded Prisma config from prisma.config.ts.
+
+Prisma schema loaded from prisma/schema.prisma.
+Datasource "db": PostgreSQL database "legal_consult_test", schema "public" at "localhost:5433"
+
+3 migrations found in prisma/migrations
+
+
+No pending migrations to apply.
+◇ injected env (10) from .env.test
+Loaded Prisma config from prisma.config.ts.
+
+Prisma schema loaded from prisma/schema.prisma.
+
+✔ Generated Prisma Client (7.10.1) to ./src/generated/prisma in 44ms
+
+▶ Health
+  ✔ GET /health повертає статус ok (1.827166ms)
+✔ Health (271.712584ms)
+▶ Users API (захищено токеном)
+  ✔ GET /api/users без токена → 401 (1.489334ms)
+  ✔ GET /api/users з токеном → пагінований список, без паролів (9.690375ms)
+  ✔ GET /api/users?role=LAWYER&search= фільтр + пошук (7.009708ms)
+  ✔ POST /api/users без токена → 401, звичайний користувач → 403, адмін → 201 (41.2265ms)
+  ✔ PUT /api/users/:id — власник ок, чужий → 403, роль змінює лише адмін (33.12425ms)
+  ✔ DELETE /api/users/:id — лише адмін, 204 → повторно 404 (41.620167ms)
+✔ Users API (захищено токеном) (134.441625ms)
+▶ Specializations API
+  ✔ GET публічний, POST без токена → 401, адмін → 201, дубль → 409 (21.876792ms)
+✔ Specializations API (22.019875ms)
+▶ Lawyers API
+  ✔ POST /api/lawyers — свій профіль → 201 і роль стала LAWYER; чужий → 403 (17.620292ms)
+  ✔ POST повторно для того самого userId → 409; невідома спеціалізація → 400 (59.31775ms)
+  ✔ GET /api/lawyers — пагінація, пошук, фільтр за спеціалізацією і ціною (6.837417ms)
+  ✔ PUT /api/lawyers/:id — власник ок, чужий → 403; isVerified лише адмін (13.157541ms)
+  ✔ GET /api/lawyers/:id — картка з відгуками і лічильником консультацій; 404 для чужого id (5.472541ms)
+✔ Lawyers API (105.900708ms)
+▶ Consultations + Messages API
+  ✔ POST /api/consultations без токена → 401; клієнт створює для себе → 201, PENDING, ціна = ставка юриста (5.165334ms)
+  ✔ GET /api/consultations — клієнт бачить лише свої, пошук працює (62.388209ms)
+  ✔ GET /api/consultations/:id сторонній → 403, учасник → 200 (64.124958ms)
+  ✔ PUT клієнт редагує PENDING і може скасувати; юрист змінює статус (11.14775ms)
+  ✔ чат: сторонній → 403, учасник → 201, історія читається (65.657833ms)
+  ✔ DELETE консультації: сторонній → 403, адмін → 204 (55.594ms)
+✔ Consultations + Messages API (264.30375ms)
+▶ Reviews API
+  ✔ відгук до завершення → 400; після COMPLETED клієнт → 201, дубль → 409, чужий → 403 (75.38725ms)
+  ✔ рейтинг поза 1-5 → 400; GET з пагінацією і фільтром; PUT чужого → 403, свій → 200 (66.729958ms)
+✔ Reviews API (142.228833ms)
+▶ Audit log
+  ✔ запити потрапляють у журнал, доступ лише адміну (3.600959ms)
+✔ Audit log (3.659667ms)
+▶ Обробка помилок
+  ✔ невідомий маршрут → 404 у форматі JSON (1.1235ms)
+  ✔ невалідний id у шляху → 400 (0.88325ms)
+  ✔ невалідний токен → 401 (0.672167ms)
+✔ Обробка помилок (2.755458ms)
+▶ Authentication API
+  ✔ реєстрація: 201, токени, без пароля у відповіді (56.52675ms)
+  ✔ дубль email → 409 (4.088625ms)
+  ✔ короткий пароль → 400 (2.369208ms)
+  ✔ вхід із правильним паролем → 200 + токени (26.561166ms)
+  ✔ хибний пароль і невідомий email → однакова 401 (28.840958ms)
+  ✔ GET /api/auth/me без токена → 401, з токеном → 200 (63.209375ms)
+  ✔ refresh: ротація, старий токен відкликано, повторне використання відкликає всі сесії (69.916708ms)
+  ✔ logout відкликає refresh токен (55.457334ms)
+  ✔ change-password: хибний поточний → 401, успіх → старі сесії відкликано, новий пароль працює (166.726083ms)
+[dev-mail] Кому: reset@example.com
+Тема: Відновлення паролю — Legal Consult
+Вітаємо! Ви запросили скидання паролю. Перейдіть за посиланням (діє 1 годину):
+http://localhost:5173/reset-password?token=28c22e6ee090140f90d58ebb34753ae826ac5a3e9b5d1df2d796510b5ab54116
+
+Якщо ви не запитували скидання — просто проігноруйте цей лист.
+  ✔ forgot/reset-password: токен із БД скидає пароль, повторне використання → 400 (124.919375ms)
+  ✔ 2FA: enable → confirm кодом → login вимагає totp → disable (186.689291ms)
+  ✔ 2FA confirm із хибним кодом → 400 (60.723542ms)
+✔ Authentication API (906.989042ms)
+▶ Files API
+  ✔ upload без токена → 401 (17.775833ms)
+  ✔ завантаження PNG → 201, отримання файлу → 200, чужий delete → 403, свій → 200 (143.58ms)
+  ✔ .exe відхиляється (MIME + розширення), завеликий файл → 400 «Файл занадто великий» (76.048667ms)
+  ✔ upload-multiple: кілька файлів одразу (files[]), /my повертає пагінований список (69.295125ms)
+  ✔ файли консультації: учасник бачить, сторонній → 403; прив’язка чужої консультації → 403 (268.32ms)
+✔ Files API (639.912042ms)
+ℹ tests 42
+ℹ suites 10
+ℹ pass 42
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3297.448667

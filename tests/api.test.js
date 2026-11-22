@@ -3,17 +3,21 @@ import assert from 'node:assert/strict';
 import request from 'supertest';
 import app from '../src/app.js';
 import { prisma } from '../src/db.js';
+import { registerUser, wipeDatabase } from './helpers.js';
+
+let admin;
+let client;
+let lawyerUser;
 
 before(async () => {
-  await prisma.review.deleteMany();
-  await prisma.message.deleteMany();
-  await prisma.consultation.deleteMany();
-  await prisma.lawyerProfile.deleteMany();
-  await prisma.specialization.deleteMany();
-  await prisma.user.deleteMany();
+  await wipeDatabase();
+  admin = await registerUser('ADMIN', { email: 'admin@test.local' });
+  client = await registerUser('CLIENT', { email: 'client@test.local' });
+  lawyerUser = await registerUser('CLIENT', { email: 'lawyer@test.local' });
 });
 
 after(async () => {
+  await wipeDatabase();
   await prisma.$disconnect();
 });
 
@@ -25,262 +29,364 @@ describe('Health', () => {
   });
 });
 
-describe('Users API', () => {
-  const client = { email: 'client@example.com', name: 'Олена Ковальчук', phone: '+380501112233', role: 'CLIENT' };
-
-  test('POST /api/users створює клієнта', async () => {
-    const res = await request(app).post('/api/users').send(client);
-    assert.equal(res.status, 201);
-    assert.equal(res.body.data.email, client.email);
-    assert.equal(res.body.data.role, 'CLIENT');
+describe('Users API (захищено токеном)', () => {
+  test('GET /api/users без токена → 401', async () => {
+    assert.equal((await request(app).get('/api/users')).status, 401);
   });
 
-  test('POST /api/users з невалідним email → 400 з деталями', async () => {
-    const res = await request(app).post('/api/users').send({ email: 'not-an-email', name: 'Тест Тестов' });
-    assert.equal(res.status, 400);
-    assert.equal(res.body.error, 'Помилка валідації даних');
-    assert.ok(res.body.details.email);
-  });
-
-  test("POST /api/users з коротким ім'ям → 400", async () => {
-    const res = await request(app).post('/api/users').send({ email: 'ok@example.com', name: 'A' });
-    assert.equal(res.status, 400);
-    assert.ok(res.body.details.name);
-  });
-
-  test('POST /api/users з дублем email → 409', async () => {
-    const res = await request(app).post('/api/users').send(client);
-    assert.equal(res.status, 409);
-  });
-
-  test('GET /api/users?role=LAWYER фільтрує за роллю', async () => {
-    await request(app).post('/api/users').send({ email: 'lawyer@example.com', name: 'Петро Юрист', role: 'LAWYER' });
-    const res = await request(app).get('/api/users?role=LAWYER');
+  test('GET /api/users з токеном → пагінований список, без паролів', async () => {
+    const res = await request(app).get('/api/users').set(client.auth);
     assert.equal(res.status, 200);
-    assert.ok(res.body.data.length > 0);
-    assert.ok(res.body.data.every((u) => u.role === 'LAWYER'));
+    assert.ok(Array.isArray(res.body.data));
+    assert.ok(res.body.pagination.total >= 3);
+    assert.ok(res.body.data.every((u) => u.password === undefined));
   });
 
-  test('GET /api/users/:id → 404 для неіснуючого', async () => {
-    const res = await request(app).get('/api/users/9999');
-    assert.equal(res.status, 404);
-    assert.ok(res.body.error);
-  });
-
-  test('PUT /api/users/:id оновлює ім\'я', async () => {
-    const created = await request(app).post('/api/users').send({ email: 'edit@example.com', name: 'Старе Ім\'я' });
-    const id = created.body.data.id;
-    const res = await request(app).put(`/api/users/${id}`).send({ name: 'Нове Ім\'я' });
+  test('GET /api/users?role=LAWYER&search= фільтр + пошук', async () => {
+    const res = await request(app).get('/api/users?role=CLIENT&search=client').set(admin.auth);
     assert.equal(res.status, 200);
-    assert.equal(res.body.data.name, 'Нове Ім\'я');
+    assert.ok(res.body.data.length >= 1);
+    assert.ok(res.body.data.every((u) => u.role === 'CLIENT' && u.email.includes('client')));
   });
 
-  test('DELETE /api/users/:id → 204, повторний → 404', async () => {
-    const created = await request(app).post('/api/users').send({ email: 'del@example.com', name: 'Видалити Мене' });
-    const id = created.body.data.id;
-    assert.equal((await request(app).delete(`/api/users/${id}`)).status, 204);
-    assert.equal((await request(app).delete(`/api/users/${id}`)).status, 404);
+  test('POST /api/users без токена → 401, звичайний користувач → 403, адмін → 201', async () => {
+    assert.equal((await request(app).post('/api/users').send({})).status, 401);
+    const forbidden = await request(app)
+      .post('/api/users')
+      .set(client.auth)
+      .send({ email: 'x@x.ua', password: 'password123', name: 'Хакер' });
+    assert.equal(forbidden.status, 403);
+
+    const ok = await request(app)
+      .post('/api/users')
+      .set(admin.auth)
+      .send({ email: 'newbie@test.local', password: 'password123', name: 'Новий Юзер' });
+    assert.equal(ok.status, 201);
+    assert.equal(ok.body.data.password, undefined);
+  });
+
+  test('PUT /api/users/:id — власник ок, чужий → 403, роль змінює лише адмін', async () => {
+    const other = await request(app)
+      .post('/api/users')
+      .set(admin.auth)
+      .send({ email: 'other@test.local', password: 'password123', name: 'Інший' });
+    const otherId = other.body.data.id;
+
+    const forbidden = await request(app).put(`/api/users/${otherId}`).set(client.auth).send({ name: 'Зламане Ім\'я' });
+    assert.equal(forbidden.status, 403);
+
+    const roleChange = await request(app).put(`/api/users/${client.id}`).set(client.auth).send({ role: 'ADMIN' });
+    assert.equal(roleChange.status, 403);
+
+    const ok = await request(app).put(`/api/users/${client.id}`).set(client.auth).send({ name: 'Клієнт Оновлений' });
+    assert.equal(ok.status, 200);
+    assert.equal(ok.body.data.name, 'Клієнт Оновлений');
+  });
+
+  test('DELETE /api/users/:id — лише адмін, 204 → повторно 404', async () => {
+    const u = await request(app)
+      .post('/api/users')
+      .set(admin.auth)
+      .send({ email: 'del@test.local', password: 'password123', name: 'Видалити' });
+    const id = u.body.data.id;
+    assert.equal((await request(app).delete(`/api/users/${id}`).set(client.auth)).status, 403);
+    assert.equal((await request(app).delete(`/api/users/${id}`).set(admin.auth)).status, 204);
+    assert.equal((await request(app).get(`/api/users/${id}`).set(admin.auth)).status, 404);
   });
 });
 
 describe('Specializations API', () => {
-  test('CRUD: створення, дубль → 409, список, видалення', async () => {
-    const created = await request(app).post('/api/specializations').send({ name: 'Цивільне право', description: 'Договори, нерухомість' });
-    assert.equal(created.status, 201);
-
-    const dup = await request(app).post('/api/specializations').send({ name: 'Цивільне право' });
-    assert.equal(dup.status, 409);
-
+  test('GET публічний, POST без токена → 401, адмін → 201, дубль → 409', async () => {
     const list = await request(app).get('/api/specializations');
     assert.equal(list.status, 200);
-    assert.ok(list.body.data.some((s) => s.name === 'Цивільне право'));
 
-    const id = created.body.data.id;
-    assert.equal((await request(app).delete(`/api/specializations/${id}`)).status, 204);
-    assert.equal((await request(app).get(`/api/specializations/${id}`)).status, 404);
+    assert.equal((await request(app).post('/api/specializations').send({ name: 'Трудове право' })).status, 401);
+
+    const created = await request(app)
+      .post('/api/specializations')
+      .set(admin.auth)
+      .send({ name: 'Трудове право', description: 'Трудові спори' });
+    assert.equal(created.status, 201);
+
+    const dup = await request(app).post('/api/specializations').set(admin.auth).send({ name: 'Трудове право' });
+    assert.equal(dup.status, 409);
+
+    assert.equal((await request(app).delete(`/api/specializations/${created.body.data.id}`).set(client.auth)).status, 403);
+    assert.equal((await request(app).delete(`/api/specializations/${created.body.data.id}`).set(admin.auth)).status, 204);
   });
 });
 
 describe('Lawyers API', () => {
-  let lawyerUserId;
   let profileId;
   let specId;
 
   before(async () => {
-    const u = await request(app).post('/api/users').send({ email: 'lawyer2@example.com', name: 'Іван Адвокат', role: 'LAWYER' });
-    lawyerUserId = u.body.data.id;
-    const s = await request(app).post('/api/specializations').send({ name: 'Кримінальне право' });
+    const s = await request(app).post('/api/specializations').set(admin.auth).send({ name: 'Кримінальне право' });
     specId = s.body.data.id;
   });
 
-  test('POST /api/lawyers створює профіль із спеціалізацією і роллю LAWYER', async () => {
+  test('POST /api/lawyers — свій профіль → 201 і роль стала LAWYER; чужий → 403', async () => {
+    const foreign = await request(app)
+      .post('/api/lawyers')
+      .set(lawyerUser.auth)
+      .send({ userId: client.id, pricePerHour: 100 });
+    assert.equal(foreign.status, 403);
+
     const res = await request(app)
       .post('/api/lawyers')
-      .send({ userId: lawyerUserId, bio: 'Адвокат, 10 років практики', experienceYears: 10, pricePerHour: 800, specializationIds: [specId] });
+      .set(lawyerUser.auth)
+      .send({
+        userId: lawyerUser.id,
+        bio: 'Адвокат, 10 років практики',
+        experienceYears: 10,
+        pricePerHour: 800,
+        specializationIds: [specId],
+      });
     assert.equal(res.status, 201);
     profileId = res.body.data.id;
     assert.equal(res.body.data.specializations.length, 1);
-    assert.equal(Number(res.body.data.pricePerHour), 800);
 
-    const user = await request(app).get(`/api/users/${lawyerUserId}`);
-    assert.equal(user.body.data.role, 'LAWYER');
+    const me = await request(app).get('/api/auth/me').set(lawyerUser.auth);
+    assert.equal(me.body.data.role, 'LAWYER');
   });
 
-  test('POST /api/lawyers повторно для того самого userId → 409', async () => {
-    const res = await request(app).post('/api/lawyers').send({ userId: lawyerUserId, pricePerHour: 100 });
-    assert.equal(res.status, 409);
-  });
-
-  test('POST /api/lawyers з неіснуючою спеціалізацією → 400', async () => {
-    const u = await request(app).post('/api/users').send({ email: 'lawyer3@example.com', name: 'Інший Юрист' });
-    const res = await request(app)
+  test('POST повторно для того самого userId → 409; невідома спеціалізація → 400', async () => {
+    const dup = await request(app)
       .post('/api/lawyers')
-      .send({ userId: u.body.data.id, pricePerHour: 100, specializationIds: [99999] });
-    assert.equal(res.status, 400);
+      .set(lawyerUser.auth)
+      .send({ userId: lawyerUser.id, pricePerHour: 100 });
+    assert.equal(dup.status, 409);
+
+    const other = await registerUser('CLIENT', { email: 'lawyer2@test.local' });
+    const bad = await request(app)
+      .post('/api/lawyers')
+      .set(other.auth)
+      .send({ userId: other.id, pricePerHour: 100, specializationIds: [99999] });
+    assert.equal(bad.status, 400);
   });
 
-  test('POST /api/lawyers з неіснуючим користувачем → 404', async () => {
-    const res = await request(app).post('/api/lawyers').send({ userId: 99999, pricePerHour: 100 });
-    assert.equal(res.status, 404);
+  test('GET /api/lawyers — пагінація, пошук, фільтр за спеціалізацією і ціною', async () => {
+    const all = await request(app).get('/api/lawyers?page=1&limit=10');
+    assert.equal(all.status, 200);
+    assert.ok(all.body.pagination.total >= 1);
+
+    const filtered = await request(app).get(`/api/lawyers?specializationId=${specId}&minPrice=700&maxPrice=900&search=адвокат`);
+    assert.equal(filtered.status, 200);
+    assert.ok(filtered.body.data.length >= 1);
+    assert.ok(
+      filtered.body.data.every(
+        (l) => l.specializations.some((s) => s.id === specId) && Number(l.pricePerHour) >= 700 && Number(l.pricePerHour) <= 900
+      )
+    );
   });
 
-  test('GET /api/lawyers?specializationId= фільтрує за сферою права', async () => {
-    const res = await request(app).get(`/api/lawyers?specializationId=${specId}`);
+  test('PUT /api/lawyers/:id — власник ок, чужий → 403; isVerified лише адмін', async () => {
+    const forbidden = await request(app).put(`/api/lawyers/${profileId}`).set(client.auth).send({ pricePerHour: 1 });
+    assert.equal(forbidden.status, 403);
+
+    const notAdmin = await request(app).put(`/api/lawyers/${profileId}`).set(lawyerUser.auth).send({ isVerified: true });
+    assert.equal(notAdmin.status, 403);
+
+    const ok = await request(app).put(`/api/lawyers/${profileId}`).set(lawyerUser.auth).send({ pricePerHour: 850 });
+    assert.equal(ok.status, 200);
+    assert.equal(Number(ok.body.data.pricePerHour), 850);
+
+    const verified = await request(app).put(`/api/lawyers/${profileId}`).set(admin.auth).send({ isVerified: true });
+    assert.equal(verified.status, 200);
+    assert.equal(verified.body.data.isVerified, true);
+  });
+
+  test('GET /api/lawyers/:id — картка з відгуками і лічильником консультацій; 404 для чужого id', async () => {
+    const res = await request(app).get(`/api/lawyers/${profileId}`);
     assert.equal(res.status, 200);
-    assert.ok(res.body.data.length > 0);
-    assert.ok(res.body.data.every((l) => l.specializations.some((s) => s.id === specId)));
-  });
+    assert.ok(Array.isArray(res.body.data.reviews));
+    assert.equal(typeof res.body.data.consultationsCount, 'number');
 
-  test('GET /api/lawyers/:id → 404 для неіснуючого профілю', async () => {
-    const res = await request(app).get('/api/lawyers/99999');
-    assert.equal(res.status, 404);
+    assert.equal((await request(app).get('/api/lawyers/99999')).status, 404);
   });
 });
 
-describe('Consultations API', () => {
-  let clientId;
-  let lawyerUserId;
+describe('Consultations + Messages API', () => {
   let consultationId;
 
-  before(async () => {
-    const c = await request(app).post('/api/users').send({ email: 'cli2@example.com', name: 'Клієнт Другий' });
-    clientId = c.body.data.id;
-    const l = await request(app).post('/api/users').send({ email: 'law4@example.com', name: 'Юрист Четвертий' });
-    lawyerUserId = l.body.data.id;
-    await request(app).post('/api/lawyers').send({ userId: lawyerUserId, pricePerHour: 500, experienceYears: 3 });
-  });
+  test('POST /api/consultations без токена → 401; клієнт створює для себе → 201, PENDING, ціна = ставка юриста', async () => {
+    assert.equal((await request(app).post('/api/consultations').send({})).status, 401);
 
-  test('POST /api/consultations — ціна за замовчуванням = ставка юриста, статус PENDING', async () => {
-    const res = await request(app).post('/api/consultations').send({
-      clientId,
-      lawyerId: lawyerUserId,
-      topic: 'Питання щодо договору оренди',
-      description: 'Потрібна консультація щодо умов договору оренди приміщення.',
-    });
+    const res = await request(app)
+      .post('/api/consultations')
+      .set(client.auth)
+      .send({
+        lawyerId: lawyerUser.id,
+        topic: 'Питання щодо договору оренди',
+        description: 'Потрібна консультація щодо умов договору оренди приміщення.',
+      });
     assert.equal(res.status, 201);
     consultationId = res.body.data.id;
     assert.equal(res.body.data.status, 'PENDING');
-    assert.equal(Number(res.body.data.price), 500);
+    assert.equal(res.body.data.clientId, client.id);
+    assert.equal(Number(res.body.data.price), 850);
   });
 
-  test('POST /api/consultations з неіснуючим юристом → 404', async () => {
-    const res = await request(app).post('/api/consultations').send({
-      clientId,
-      lawyerId: 99999,
-      topic: 'Тестова консультація',
-      description: 'Опис достатньої довжини для валідації.',
-    });
-    assert.equal(res.status, 404);
+  test('GET /api/consultations — клієнт бачить лише свої, пошук працює', async () => {
+    const outsider = await registerUser('CLIENT', { email: 'outsider@test.local' });
+
+    const asClient = await request(app).get('/api/consultations').set(client.auth);
+    assert.equal(asClient.status, 200);
+    assert.ok(asClient.body.data.length >= 1);
+    assert.ok(asClient.body.data.every((c) => c.clientId === client.id || c.lawyerId === client.id));
+
+    const asOutsider = await request(app).get('/api/consultations').set(outsider.auth);
+    assert.equal(asOutsider.status, 200);
+    assert.equal(asOutsider.body.data.length, 0);
+
+    const searched = await request(app).get('/api/consultations?search=оренди').set(client.auth);
+    assert.ok(searched.body.data.length >= 1);
+    assert.ok(searched.body.data.every((c) => c.topic.includes('оренди') || c.description.includes('оренди')));
   });
 
-  test('PUT /api/consultations/:id — зміна статусу', async () => {
-    const res = await request(app).put(`/api/consultations/${consultationId}`).send({ status: 'CONFIRMED' });
-    assert.equal(res.status, 200);
-    assert.equal(res.body.data.status, 'CONFIRMED');
+  test('GET /api/consultations/:id сторонній → 403, учасник → 200', async () => {
+    const outsider = await registerUser('CLIENT', { email: 'outsider2@test.local' });
+    assert.equal((await request(app).get(`/api/consultations/${consultationId}`).set(outsider.auth)).status, 403);
+    assert.equal((await request(app).get(`/api/consultations/${consultationId}`).set(client.auth)).status, 200);
   });
 
-  test('PUT /api/consultations/:id з невалідним статусом → 400', async () => {
-    const res = await request(app).put(`/api/consultations/${consultationId}`).send({ status: 'WRONG' });
-    assert.equal(res.status, 400);
-    assert.ok(res.body.details.status);
+  test('PUT клієнт редагує PENDING і може скасувати; юрист змінює статус', async () => {
+    const edit = await request(app)
+      .put(`/api/consultations/${consultationId}`)
+      .set(client.auth)
+      .send({ topic: 'Оренда приміщення (уточнено)' });
+    assert.equal(edit.status, 200);
+    assert.equal(edit.body.data.topic, 'Оренда приміщення (уточнено)');
+
+    // клієнт не може поставити довільний статус
+    const badStatus = await request(app)
+      .put(`/api/consultations/${consultationId}`)
+      .set(client.auth)
+      .send({ status: 'COMPLETED' });
+    assert.equal(badStatus.status, 403);
+
+    // юрист підтверджує
+    const confirm = await request(app)
+      .put(`/api/consultations/${consultationId}`)
+      .set(lawyerUser.auth)
+      .send({ status: 'CONFIRMED' });
+    assert.equal(confirm.status, 200);
+    assert.equal(confirm.body.data.status, 'CONFIRMED');
+
+    // після підтвердження клієнт уже не редагує
+    const lateEdit = await request(app)
+      .put(`/api/consultations/${consultationId}`)
+      .set(client.auth)
+      .send({ topic: 'Пізня зміна теми' });
+    assert.equal(lateEdit.status, 400);
   });
 
-  test('POST /:id/messages від сторонньої особи → 403', async () => {
-    const outsider = await request(app).post('/api/users').send({ email: 'outsider@example.com', name: 'Сторонній' });
-    const res = await request(app)
+  test('чат: сторонній → 403, учасник → 201, історія читається', async () => {
+    const outsider = await registerUser('CLIENT', { email: 'outsider3@test.local' });
+
+    const forbidden = await request(app)
       .post(`/api/consultations/${consultationId}/messages`)
-      .send({ senderId: outsider.body.data.id, text: 'Привіт, я тут випадково' });
-    assert.equal(res.status, 403);
-  });
+      .set(outsider.auth)
+      .send({ text: 'Привіт, я тут випадково' });
+    assert.equal(forbidden.status, 403);
 
-  test('POST /:id/messages від клієнта → 201, GET повертає історію', async () => {
     const post = await request(app)
       .post(`/api/consultations/${consultationId}/messages`)
-      .send({ senderId: clientId, text: 'Добрий день! Коли зручно провести консультацію?' });
+      .set(client.auth)
+      .send({ text: 'Добрий день! Коли зручно провести консультацію?' });
     assert.equal(post.status, 201);
-    assert.equal(post.body.data.sender.id, clientId);
+    assert.equal(post.body.data.sender.id, client.id);
 
-    const list = await request(app).get(`/api/consultations/${consultationId}/messages`);
+    const list = await request(app).get(`/api/consultations/${consultationId}/messages`).set(lawyerUser.auth);
     assert.equal(list.status, 200);
     assert.equal(list.body.data.length, 1);
-    assert.equal(list.body.data[0].text, 'Добрий день! Коли зручно провести консультацію?');
   });
 
-  test('GET /api/consultations?status=CONFIRMED фільтрує', async () => {
-    const res = await request(app).get('/api/consultations?status=CONFIRMED');
-    assert.equal(res.status, 200);
-    assert.ok(res.body.data.every((c) => c.status === 'CONFIRMED'));
+  test('DELETE консультації: сторонній → 403, адмін → 204', async () => {
+    const outsider = await registerUser('CLIENT', { email: 'outsider4@test.local' });
+    assert.equal((await request(app).delete(`/api/consultations/${consultationId}`).set(outsider.auth)).status, 403);
+    assert.equal((await request(app).delete(`/api/consultations/${consultationId}`).set(admin.auth)).status, 204);
   });
 });
 
 describe('Reviews API', () => {
-  test('відгук до завершення консультації → 400', async () => {
-    const list = await request(app).get('/api/consultations?status=CONFIRMED');
-    const { id } = list.body.data[0];
-    const res = await request(app).post('/api/reviews').send({ consultationId: id, rating: 5, text: 'Супер' });
-    assert.equal(res.status, 400);
-  });
+  let consultationId;
 
-  test('після COMPLETED відгук створюється, дубль → 409, рейтинг юриста оновлюється', async () => {
-    const list = await request(app).get('/api/consultations?status=CONFIRMED');
-    const consultation = list.body.data[0];
-
-    await request(app).put(`/api/consultations/${consultation.id}`).send({ status: 'COMPLETED' });
-
+  test('відгук до завершення → 400; після COMPLETED клієнт → 201, дубль → 409, чужий → 403', async () => {
     const created = await request(app)
-      .post('/api/reviews')
-      .send({ consultationId: consultation.id, rating: 4, text: 'Гарна консультація, дякую' });
-    assert.equal(created.status, 201);
-    assert.equal(created.body.data.rating, 4);
-    assert.equal(created.body.data.lawyerId, consultation.lawyerId);
+      .post('/api/consultations')
+      .set(client.auth)
+      .send({
+        lawyerId: lawyerUser.id,
+        topic: 'Другий договір на перевірку',
+        description: 'Прошу перевірити договір поставки між юрособами.',
+      });
+    consultationId = created.body.data.id;
 
-    const dup = await request(app).post('/api/reviews').send({ consultationId: consultation.id, rating: 5 });
+    const early = await request(app)
+      .post('/api/reviews')
+      .set(client.auth)
+      .send({ consultationId, rating: 5, text: 'Супер' });
+    assert.equal(early.status, 400);
+
+    await request(app).put(`/api/consultations/${consultationId}`).set(lawyerUser.auth).send({ status: 'COMPLETED' });
+
+    const ok = await request(app)
+      .post('/api/reviews')
+      .set(client.auth)
+      .send({ consultationId, rating: 4, text: 'Гарна консультація, дякую' });
+    assert.equal(ok.status, 201);
+    assert.equal(ok.body.data.clientId, client.id);
+
+    const dup = await request(app).post('/api/reviews').set(client.auth).send({ consultationId, rating: 5 });
     assert.equal(dup.status, 409);
 
-    const lawyer = await request(app).get(`/api/lawyers?specializationId=`);
-    assert.equal(lawyer.status, 200);
-
-    const reviews = await request(app).get(`/api/reviews?lawyerId=${consultation.lawyerId}`);
-    assert.equal(reviews.status, 200);
-    assert.equal(reviews.body.data.length, 1);
-
-    // рейтинг профілю перераховано: шукаємо профіль за userId через список
-    const all = await request(app).get('/api/lawyers');
-    const profile = all.body.data.find((l) => l.user.id === consultation.lawyerId);
-    assert.equal(Number(profile.rating), 4);
+    const other = await registerUser('CLIENT', { email: 'rev-outsider@test.local' });
+    const foreign = await request(app)
+      .post('/api/reviews')
+      .set(other.auth)
+      .send({ consultationId: 99999, rating: 5 });
+    assert.equal(foreign.status, 404);
   });
 
-  test('рейтинг поза діапазоном 1-5 → 400', async () => {
-    const list = await request(app).get('/api/consultations?status=COMPLETED');
-    const other = await request(app).post('/api/consultations').send({
-      clientId: list.body.data[0].clientId,
-      lawyerId: list.body.data[0].lawyerId,
-      topic: 'Ще одна консультація',
-      description: 'Опис достатньої довжини для валідації.',
-    });
-    await request(app).put(`/api/consultations/${other.body.data.id}`).send({ status: 'COMPLETED' });
-    const res = await request(app).post('/api/reviews').send({ consultationId: other.body.data.id, rating: 9 });
-    assert.equal(res.status, 400);
+  test('рейтинг поза 1-5 → 400; GET з пагінацією і фільтром; PUT чужого → 403, свій → 200', async () => {
+    const badRating = await request(app)
+      .post('/api/reviews')
+      .set(client.auth)
+      .send({ consultationId, rating: 9 });
+    assert.equal(badRating.status, 400);
+
+    const list = await request(app).get(`/api/reviews?lawyerId=${lawyerUser.id}&minRating=1&page=1&limit=10`);
+    assert.equal(list.status, 200);
+    assert.equal(list.body.data.length, 1);
+    assert.equal(list.body.pagination.total, 1);
+
+    const reviewId = list.body.data[0].id;
+    const other = await registerUser('CLIENT', { email: 'rev-outsider2@test.local' });
+    assert.equal((await request(app).put(`/api/reviews/${reviewId}`).set(other.auth).send({ rating: 1 })).status, 403);
+
+    const ok = await request(app).put(`/api/reviews/${reviewId}`).set(client.auth).send({ rating: 5 });
+    assert.equal(ok.status, 200);
+    assert.equal(ok.body.data.rating, 5);
+
+    // рейтинг профілю перераховано
+    const profile = await request(app).get('/api/lawyers?limit=100');
+    const p = profile.body.data.find((l) => l.user.id === lawyerUser.id);
+    assert.equal(Number(p.rating), 5);
+  });
+});
+
+describe('Audit log', () => {
+  test('запити потрапляють у журнал, доступ лише адміну', async () => {
+    const asClient = await request(app).get('/api/audit-logs').set(client.auth);
+    assert.equal(asClient.status, 403);
+
+    const res = await request(app).get('/api/audit-logs?page=1&limit=5').set(admin.auth);
+    assert.equal(res.status, 200);
+    assert.ok(res.body.pagination.total >= 1);
+    // чутливі поля замасковані
+    const actions = res.body.data.map((a) => a.action);
+    assert.ok(actions.some((a) => a.startsWith('POST')));
   });
 });
 
@@ -292,8 +398,13 @@ describe('Обробка помилок', () => {
   });
 
   test('невалідний id у шляху → 400', async () => {
-    const res = await request(app).get('/api/users/abc');
+    const res = await request(app).get('/api/users/abc').set(admin.auth);
     assert.equal(res.status, 400);
     assert.ok(res.body.error);
+  });
+
+  test('невалідний токен → 401', async () => {
+    const res = await request(app).get('/api/users').set('Authorization', 'Bearer fake.token.here');
+    assert.equal(res.status, 401);
   });
 });

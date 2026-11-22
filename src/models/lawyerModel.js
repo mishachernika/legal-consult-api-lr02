@@ -10,6 +10,14 @@ export const lawyerModel = {
   findAll: ({ where, orderBy }) =>
     prisma.lawyerProfile.findMany({ where, include: lawyerInclude, orderBy }),
 
+  findPage: async ({ where, skip, take, orderBy }) => {
+    const [items, total] = await Promise.all([
+      prisma.lawyerProfile.findMany({ where, skip, take, include: lawyerInclude, orderBy }),
+      prisma.lawyerProfile.count({ where }),
+    ]);
+    return { items, total };
+  },
+
   findById: (id) => prisma.lawyerProfile.findUnique({ where: { id }, include: lawyerInclude }),
 
   findByUserId: (userId) => prisma.lawyerProfile.findUnique({ where: { userId } }),

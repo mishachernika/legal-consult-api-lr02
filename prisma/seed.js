@@ -1,14 +1,24 @@
 import 'dotenv/config';
 import { prisma } from '../src/db.js';
+import { hashPassword } from '../src/utils/password.js';
+
+// Демо-пароль для всіх сідів-акаунтів (лише для локальної розробки!)
+const DEMO_PASSWORD = 'password123';
 
 async function main() {
   // очищаємо таблиці у порядку, що не порушує зовнішні ключі
+  await prisma.auditLog.deleteMany();
+  await prisma.refreshToken.deleteMany();
+  await prisma.passwordResetToken.deleteMany();
+  await prisma.file.deleteMany();
   await prisma.review.deleteMany();
   await prisma.message.deleteMany();
   await prisma.consultation.deleteMany();
   await prisma.lawyerProfile.deleteMany();
   await prisma.specialization.deleteMany();
   await prisma.user.deleteMany();
+
+  const password = await hashPassword(DEMO_PASSWORD);
 
   const specializationsData = [
     { name: 'Цивільне право', description: 'Договори, нерухомість, відшкодування шкоди, спадщина' },
@@ -24,7 +34,7 @@ async function main() {
   }
 
   const admin = await prisma.user.create({
-    data: { email: 'admin@legal.ua', name: 'Адміністратор платформи', role: 'ADMIN' },
+    data: { email: 'admin@legal.ua', password, name: 'Адміністратор платформи', role: 'ADMIN' },
   });
 
   const lawyersData = [
@@ -60,7 +70,7 @@ async function main() {
   const lawyerProfiles = [];
   for (const l of lawyersData) {
     const user = await prisma.user.create({
-      data: { email: l.email, name: l.name, phone: l.phone, role: 'LAWYER' },
+      data: { email: l.email, password, name: l.name, phone: l.phone, role: 'LAWYER' },
     });
     const profile = await prisma.lawyerProfile.create({
       data: {
@@ -82,7 +92,7 @@ async function main() {
   ];
   const clients = [];
   for (const c of clientsData) {
-    clients.push(await prisma.user.create({ data: { ...c, role: 'CLIENT' } }));
+    clients.push(await prisma.user.create({ data: { ...c, password, role: 'CLIENT' } }));
   }
 
   const consultationsData = [
@@ -162,9 +172,13 @@ async function main() {
 
   console.log('Seed завершено:');
   console.log(`- спеціалізацій: ${specs.length}`);
-  console.log(`- користувачів: ${1 + lawyerProfiles.length + clients.length} (адмін: ${admin.email})`);
+  console.log(`- користувачів: ${1 + lawyerProfiles.length + clients.length}`);
   console.log(`- профілів юристів: ${lawyerProfiles.length}`);
   console.log(`- консультацій: ${consultations.length}`);
+  console.log('\nДемо-акаунти (пароль для всіх: ' + DEMO_PASSWORD + '):');
+  console.log(`- адмін:    ${admin.email}`);
+  for (const l of lawyerProfiles) console.log(`- юрист:    ${l.user.email}`);
+  for (const c of clients) console.log(`- клієнт:   ${c.email}`);
 }
 
 main()

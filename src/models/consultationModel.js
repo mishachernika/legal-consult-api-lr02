@@ -14,6 +14,14 @@ export const consultationModel = {
       orderBy: { createdAt: 'desc' },
     }),
 
+  findPage: async (where, { skip, take, orderBy = { createdAt: 'desc' } }) => {
+    const [items, total] = await Promise.all([
+      prisma.consultation.findMany({ where, skip, take, orderBy, include: consultationInclude }),
+      prisma.consultation.count({ where }),
+    ]);
+    return { items, total };
+  },
+
   findById: (id) =>
     prisma.consultation.findUnique({
       where: { id },

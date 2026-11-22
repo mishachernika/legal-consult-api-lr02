@@ -7,6 +7,7 @@ import {
   deleteLawyer,
 } from '../controllers/lawyerController.js';
 import { getReviewsByLawyer } from '../controllers/reviewController.js';
+import { authenticate } from '../middleware/auth.js';
 
 const router = Router();
 
@@ -37,11 +38,19 @@ const router = Router();
  *       - in: query
  *         name: order
  *         schema: { type: string, enum: [asc, desc], default: desc }
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer, default: 1 }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 10, maximum: 100 }
  *     responses:
- *       200: { description: Список юристів }
+ *       200: { description: Список юристів із пагінацією }
  *   post:
- *     summary: Створення профілю юриста для користувача
+ *     summary: Створення профілю юриста для власного акаунта (або для будь-якого — адміністратором)
  *     tags: [Lawyers]
+ *     security:
+ *       - bearerAuth: []
  *     requestBody:
  *       required: true
  *       content:
@@ -59,11 +68,13 @@ const router = Router();
  *     responses:
  *       201: { description: Профіль створено, роль користувача стала LAWYER }
  *       400: { description: Помилка валідації або спеціалізації не знайдено }
+ *       401: { description: Необхідна аутентифікація }
+ *       403: { description: Недостатньо прав }
  *       404: { description: Користувача не знайдено }
  *       409: { description: Профіль для цього користувача вже існує }
  */
 router.get('/', getLawyers);
-router.post('/', createLawyer);
+router.post('/', authenticate, createLawyer);
 
 /**
  * @swagger
@@ -80,8 +91,10 @@ router.post('/', createLawyer);
  *       200: { description: Профіль юриста }
  *       404: { description: Профіль не знайдено }
  *   put:
- *     summary: Оновлення профілю юриста
+ *     summary: Оновлення профілю юриста (власник або адмін; верифікацію ставить лише адмін)
  *     tags: [Lawyers]
+ *     security:
+ *       - bearerAuth: []
  *     parameters:
  *       - in: path
  *         name: id
@@ -90,10 +103,14 @@ router.post('/', createLawyer);
  *     responses:
  *       200: { description: Профіль оновлено }
  *       400: { description: Помилка валідації }
+ *       401: { description: Необхідна аутентифікація }
+ *       403: { description: Недостатньо прав }
  *       404: { description: Профіль не знайдено }
  *   delete:
- *     summary: Видалення профілю юриста (роль користувача стане CLIENT)
+ *     summary: Видалення профілю юриста (власник або адмін; роль користувача стане CLIENT)
  *     tags: [Lawyers]
+ *     security:
+ *       - bearerAuth: []
  *     parameters:
  *       - in: path
  *         name: id
@@ -101,11 +118,13 @@ router.post('/', createLawyer);
  *         schema: { type: integer }
  *     responses:
  *       204: { description: Профіль видалено }
+ *       401: { description: Необхідна аутентифікація }
+ *       403: { description: Недостатньо прав }
  *       404: { description: Профіль не знайдено }
  */
 router.get('/:id', getLawyerById);
-router.put('/:id', updateLawyer);
-router.delete('/:id', deleteLawyer);
+router.put('/:id', authenticate, updateLawyer);
+router.delete('/:id', authenticate, deleteLawyer);
 
 /**
  * @swagger

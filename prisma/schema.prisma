@@ -22,13 +22,17 @@ enum ConsultationStatus {
 }
 
 model User {
-  id        Int      @id @default(autoincrement())
-  email     String   @unique
-  name      String
-  phone     String?
-  role      Role     @default(CLIENT)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id           Int       @id @default(autoincrement())
+  email        String    @unique
+  password     String
+  name         String
+  phone        String?
+  role         Role      @default(CLIENT)
+  avatar       String?
+  totpSecret   String?
+  totpEnabled  Boolean   @default(false)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
   lawyerProfile         LawyerProfile?
   consultationsAsClient Consultation[] @relation("ClientConsultations")
@@ -36,6 +40,10 @@ model User {
   messages              Message[]
   reviews               Review[]
   reviewsAbout          Review[]       @relation("LawyerReviews")
+  files                 File[]
+  refreshTokens         RefreshToken[]
+  resetTokens           PasswordResetToken[]
+  auditLogs             AuditLog[]
 
   @@index([role])
 }
@@ -81,6 +89,7 @@ model Consultation {
   lawyer   User      @relation("LawyerConsultations", fields: [lawyerId], references: [id])
   messages Message[]
   review   Review?
+  files    File[]
 
   @@index([clientId])
   @@index([lawyerId])
@@ -115,4 +124,67 @@ model Review {
 
   @@index([lawyerId])
   @@index([rating])
+}
+
+// Завантажений файл (документ/зображення), можна прив'язати до консультації
+model File {
+  id             Int      @id @default(autoincrement())
+  filename       String
+  originalName   String
+  mimetype       String
+  size           Int
+  path           String
+  uploadedBy     Int
+  consultationId Int?
+  createdAt      DateTime @default(now())
+
+  user         User          @relation(fields: [uploadedBy], references: [id], onDelete: Cascade)
+  consultation Consultation? @relation(fields: [consultationId], references: [id], onDelete: SetNull)
+
+  @@index([uploadedBy])
+  @@index([consultationId])
+}
+
+// Refresh-токени зберігаємо лише у вигляді SHA-256 хешу — так їх можна відкликати
+model RefreshToken {
+  id        Int       @id @default(autoincrement())
+  tokenHash String    @unique
+  userId    Int
+  expiresAt DateTime
+  revokedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// Токени відновлення паролю (відправляємо посилання на email)
+model PasswordResetToken {
+  id        Int       @id @default(autoincrement())
+  tokenHash String    @unique
+  userId    Int
+  expiresAt DateTime
+  usedAt    DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// Журнал дій користувачів (рівень 3: аудит)
+model AuditLog {
+  id        Int      @id @default(autoincrement())
+  userId    Int?
+  action    String
+  entity    String?
+  entityId  Int?
+  details   Json?
+  ip        String?
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
 }

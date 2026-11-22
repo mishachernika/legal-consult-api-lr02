@@ -1,0 +1,177 @@
+$ curl -s http://localhost:3000/health
+{
+  "status": "ok",
+  "timestamp": "2026-11-22T18:39:18.339Z"
+}
+
+# список юристів, сортування за ціною (перші 2 записи), пагінація
+$ curl -s 'http://localhost:3000/api/lawyers?sortBy=pricePerHour&order=asc&limit=2'
+{
+  "data": [
+    {
+      "id": 2,
+      "userId": 3,
+      "bio": "Юрист із сімейних спорів, медіатор. Допомагаю мирно врегулювати конфлікти.",
+      "experienceYears": 8,
+      "pricePerHour": "700",
+      "rating": null,
+      "isVerified": true,
+      "user": {
+        "id": 3,
+        "name": "Шевченко Олена Петрівна",
+        "email": "olena.shevchenko@legal.ua",
+        "phone": "+380672223344",
+        "role": "LAWYER"
+      },
+      "specializations": [
+        {
+          "id": 3,
+          "name": "Сімейне право",
+          "description": "Розірвання шлюбу, аліменти, поділ майна, опіка над дитиною"
+        }
+      ]
+    },
+    {
+      "id": 1,
+      "userId": 2,
+      "bio": "Адвокат, 12 років практики. Спеціалізація на нерухомості та договірному праві.",
+      "experienceYears": 12,
+      "pricePerHour": "900",
+      "rating": "5",
+      "isVerified": true,
+      "user": {
+        "id": 2,
+        "name": "Петренко Іван Олексійович",
+        "email": "ivan.petrenko@legal.ua",
+        "phone": "+380671112233",
+        "role": "LAWYER"
+      },
+      "specializations": [
+        {
+          "id": 1,
+          "name": "Цивільне право",
+          "description": "Договори, нерухомість, відшкодування шкоди, спадщина"
+        },
+        {
+          "id": 4,
+          "name": "Господарське право",
+          "description": "Господарські спори, договори між підприємствами, банкрутство"
+        }
+      ]
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 2,
+    "total": 3,
+    "totalPages": 2,
+    "hasMore": true
+  }
+}
+
+# реєстрація нового клієнта → у відповіді пара JWT (access + refresh)
+$ curl -s -X POST http://localhost:3000/api/auth/register -H 'Content-Type: application/json' -d '{...}'
+{
+  "message": "Користувача успішно зареєстровано",
+  "user": {
+    "id": 18,
+    "email": "demo.7665@example.com",
+    "name": "Демо Клієнт",
+    "phone": null,
+    "role": "CLIENT",
+    "avatar": null,
+    "totpEnabled": false,
+    "createdAt": "2026-11-22T18:39:18.428Z",
+    "updatedAt": "2026-11-22T18:39:18.428Z"
+  },
+  "tokens": {
+    "accessToken": "eyJhbGciOiJIUzI1NiIsInR5c...",
+    "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5c..."
+  }
+}
+
+# вхід демо-адміном із seed і створення консультації з Bearer-токеном
+$ TOKEN=$(curl -s -X POST http://localhost:3000/api/auth/login -d '{"email":"admin@legal.ua","password":"password123"}' | jq -r .tokens.accessToken)
+$ curl -s http://localhost:3000/api/consultations -H "Authorization: Bearer $TOKEN" | ...
+{
+  "data": [
+    {
+      "id": 7,
+      "clientId": 14,
+      "lawyerId": 3,
+      "topic": "Smoke: перевірка договору",
+      "description": "Потрібна консультація щодо умов договору поставки товару.",
+      "status": "CONFIRMED",
+      "scheduledAt": null,
+      "price": "700",
+      "createdAt": "2026-11-22T18:38:31.483Z",
+      "updatedAt": "2026-11-22T18:38:31.521Z",
+      "client": {
+        "id": 14,
+        "name": "Smoke Тестовий",
+        "email": "smoke.1795372711347@example.com"
+      },
+      "lawyer": {
+        "id": 3,
+        "name": "Шевченко Олена Петрівна",
+        "email": "olena.shevchenko@legal.ua"
+      }
+    },
+    {
+      "id": 4,
+      "clientId": 7,
+      "lawyerId": 2,
+      "topic": "Трудовий спір щодо незаконного звільнення",
+      "description": "Роботодавець звільнив без попередження та не виплатив зарплату за останній місяць.",
+      "status": "PENDING",
+      "scheduledAt": null,
+      "price": "900",
+      "createdAt": "2026-11-22T18:33:07.258Z",
+      "updatedAt": "2026-11-22T18:33:07.258Z",
+      "client": {
+        "id": 7,
+        "name": "Грицай Марія Степанівна",
+        "email": "maria.grytsay@example.com"
+      },
+      "lawyer": {
+        "id": 2,
+        "name": "Петренко Іван Олексійович",
+        "email": "ivan.petrenko@legal.ua"
+      }
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 2,
+    "total": 5,
+    "totalPages": 3,
+    "hasMore": true
+  }
+}
+
+# без токена захищений маршрут повертає 401
+$ curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/api/users
+401
+
+# помилка валідації → 400 з деталями по полях
+$ curl -s -X POST http://localhost:3000/api/auth/register -d '{"email":"bad","password":"short","name":"A"}'
+{
+  "error": "Помилка валідації даних",
+  "details": {
+    "email": [
+      "невірний формат email"
+    ],
+    "password": [
+      "мінімальна довжина — 8 символів"
+    ],
+    "name": [
+      "мінімальна довжина — 2 символів"
+    ]
+  }
+}
+
+# невідомий маршрут → 404
+$ curl -s http://localhost:3000/api/nope
+{
+  "error": "Маршрут не знайдено: GET /api/nope"
+}

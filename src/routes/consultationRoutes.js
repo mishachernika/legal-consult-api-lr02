@@ -7,6 +7,7 @@ import {
   deleteConsultation,
 } from '../controllers/consultationController.js';
 import { listMessages, createMessage } from '../controllers/messageController.js';
+import { authenticate } from '../middleware/auth.js';
 
 const router = Router();
 
@@ -14,33 +15,50 @@ const router = Router();
  * @swagger
  * /api/consultations:
  *   get:
- *     summary: Список консультацій з фільтрами
+ *     summary: Список консультацій з пагінацією, пошуком і фільтрами (адмін бачить усі, решта — лише свої)
  *     tags: [Consultations]
+ *     security:
+ *       - bearerAuth: []
  *     parameters:
  *       - in: query
  *         name: clientId
  *         schema: { type: integer }
+ *         description: Фільтр за клієнтом (лише для адміна)
  *       - in: query
  *         name: lawyerId
  *         schema: { type: integer }
+ *         description: Фільтр за юристом (лише для адміна)
  *       - in: query
  *         name: status
  *         schema: { type: string, enum: [PENDING, CONFIRMED, IN_PROGRESS, COMPLETED, CANCELLED] }
+ *       - in: query
+ *         name: search
+ *         schema: { type: string }
+ *         description: Пошук за темою або описом
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer, default: 1 }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 10, maximum: 100 }
  *     responses:
- *       200: { description: Список консультацій }
+ *       200: { description: Список консультацій із пагінацією }
  *       400: { description: Невідомий статус у фільтрі }
+ *       401: { description: Необхідна аутентифікація }
  *   post:
- *     summary: Створення запиту на консультацію
+ *     summary: Створення запиту на консультацію (клієнт — для себе; адмін — для будь-якого clientId)
  *     tags: [Consultations]
+ *     security:
+ *       - bearerAuth: []
  *     requestBody:
  *       required: true
  *       content:
  *         application/json:
  *           schema:
  *             type: object
- *             required: [clientId, lawyerId, topic, description]
+ *             required: [lawyerId, topic, description]
  *             properties:
- *               clientId: { type: integer }
+ *               clientId: { type: integer, description: 'Лише для адміна; інакше береться поточний користувач' }
  *               lawyerId: { type: integer }
  *               topic: { type: string, minLength: 5, maxLength: 200 }
  *               description: { type: string, minLength: 10, maxLength: 5000 }
@@ -49,17 +67,20 @@ const router = Router();
  *     responses:
  *       201: { description: Консультацію створено зі статусом PENDING }
  *       400: { description: Помилка валідації даних }
+ *       401: { description: Необхідна аутентифікація }
  *       404: { description: Клієнта або профіль юриста не знайдено }
  */
-router.get('/', getConsultations);
-router.post('/', createConsultation);
+router.get('/', authenticate, getConsultations);
+router.post('/', authenticate, createConsultation);
 
 /**
  * @swagger
  * /api/consultations/{id}:
  *   get:
- *     summary: Картка консультації з чатом і відгуком
+ *     summary: Картка консультації з чатом і відгуком ( лише для учасників або адміна)
  *     tags: [Consultations]
+ *     security:
+ *       - bearerAuth: []
  *     parameters:
  *       - in: path
  *         name: id
@@ -67,10 +88,14 @@ router.post('/', createConsultation);
  *         schema: { type: integer }
  *     responses:
  *       200: { description: Картка консультації }
+ *       401: { description: Необхідна аутентифікація }
+ *       403: { description: Немає доступу до консультації }
  *       404: { description: Консультацію не знайдено }
  *   put:
- *     summary: Оновлення консультації (зокрема зміна статусу)
+ *     summary: Оновлення консультації за ролями (клієнт редагує лише PENDING і може скасувати; юрист — статус/час/ціну; адмін — усе)
  *     tags: [Consultations]
+ *     security:
+ *       - bearerAuth: []
  *     parameters:
  *       - in: path
  *         name: id
@@ -78,11 +103,15 @@ router.post('/', createConsultation);
  *         schema: { type: integer }
  *     responses:
  *       200: { description: Дані оновлено }
- *       400: { description: Помилка валідації даних }
+ *       400: { description: Помилка валідації даних або немає доступних полів }
+ *       401: { description: Необхідна аутентифікація }
+ *       403: { description: Немає доступу до консультації }
  *       404: { description: Консультацію не знайдено }
  *   delete:
- *     summary: Видалення консультації (чат і відгук видаляться каскадом)
+ *     summary: Видалення консультації (адмін, або клієнт — власну у статусі PENDING; чат і відгук видаляться каскадом)
  *     tags: [Consultations]
+ *     security:
+ *       - bearerAuth: []
  *     parameters:
  *       - in: path
  *         name: id
@@ -90,18 +119,22 @@ router.post('/', createConsultation);
  *         schema: { type: integer }
  *     responses:
  *       204: { description: Консультацію видалено }
+ *       401: { description: Необхідна аутентифікація }
+ *       403: { description: Недостатньо прав }
  *       404: { description: Консультацію не знайдено }
  */
-router.get('/:id', getConsultationById);
-router.put('/:id', updateConsultation);
-router.delete('/:id', deleteConsultation);
+router.get('/:id', authenticate, getConsultationById);
+router.put('/:id', authenticate, updateConsultation);
+router.delete('/:id', authenticate, deleteConsultation);
 
 /**
  * @swagger
  * /api/consultations/{id}/messages:
  *   get:
- *     summary: Історія чату консультації
+ *     summary: Історія чату консультації (лише для учасників або адміна)
  *     tags: [Consultations]
+ *     security:
+ *       - bearerAuth: []
  *     parameters:
  *       - in: path
  *         name: id
@@ -109,10 +142,14 @@ router.delete('/:id', deleteConsultation);
  *         schema: { type: integer }
  *     responses:
  *       200: { description: Список повідомлень у хронологічному порядку }
+ *       401: { description: Необхідна аутентифікація }
+ *       403: { description: Немає доступу до чату }
  *       404: { description: Консультацію не знайдено }
  *   post:
- *     summary: Надсилання повідомлення в чат консультації
+ *     summary: Надсилання повідомлення в чат (відправник — поточний користувач)
  *     tags: [Consultations]
+ *     security:
+ *       - bearerAuth: []
  *     parameters:
  *       - in: path
  *         name: id
@@ -124,17 +161,17 @@ router.delete('/:id', deleteConsultation);
  *         application/json:
  *           schema:
  *             type: object
- *             required: [senderId, text]
+ *             required: [text]
  *             properties:
- *               senderId: { type: integer }
  *               text: { type: string, minLength: 1, maxLength: 2000 }
  *     responses:
  *       201: { description: Повідомлення надіслано }
  *       400: { description: Помилка валідації даних }
- *       403: { description: Відправник не є учасником консультації }
- *       404: { description: Консультацію або відправника не знайдено }
+ *       401: { description: Необхідна аутентифікація }
+ *       403: { description: Лише учасники консультації можуть писати в чат }
+ *       404: { description: Консультацію не знайдено }
  */
-router.get('/:id/messages', listMessages);
-router.post('/:id/messages', createMessage);
+router.get('/:id/messages', authenticate, listMessages);
+router.post('/:id/messages', authenticate, createMessage);
 
 export default router;

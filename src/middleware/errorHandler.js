@@ -12,6 +12,21 @@ export function errorHandler(err, req, res, next) {
       .json({ error: err.message, ...(err.details ? { details: err.details } : {}) });
   }
 
+  // Помилки Multer (завантаження файлів)
+  if (err?.name === 'MulterError') {
+    const message =
+      err.code === 'LIMIT_FILE_SIZE'
+        ? 'Файл занадто великий'
+        : err.code === 'LIMIT_FILE_COUNT'
+          ? 'Забагато файлів у запиті'
+          : 'Помилка завантаження файлу';
+    return res.status(400).json({ error: message });
+  }
+  // Помилка з fileFilter або інший виняток зі статусом (наприклад, невалідний тип файлу)
+  if (err?.status && typeof err.status === 'number' && err.status < 500) {
+    return res.status(err.status).json({ error: err.message });
+  }
+
   // Помилки Prisma
   if (err?.code === 'P2002') {
     return res.status(409).json({
