@@ -15,7 +15,7 @@ const router = Router();
  * @swagger
  * /api/users:
  *   get:
- *     summary: Список користувачів з пагінацією, пошуком і фільтром за роллю (потрібен токен)
+ *     summary: Список користувачів з пагінацією, пошуком і фільтром за роллю (лише адміністратор — там email і телефони)
  *     tags: [Users]
  *     security:
  *       - bearerAuth: []
@@ -38,6 +38,7 @@ const router = Router();
  *       200: { description: Список користувачів із пагінацією }
  *       400: { description: Невідома роль у фільтрі }
  *       401: { description: Необхідна аутентифікація }
+ *       403: { description: Лише адміністратор }
  *   post:
  *     summary: Створення користувача адміністратором (звичайна реєстрація — POST /api/auth/register)
  *     tags: [Users]
@@ -63,14 +64,14 @@ const router = Router();
  *       403: { description: Лише адміністратор }
  *       409: { description: Email вже зайнятий }
  */
-router.get('/', authenticate, getUsers);
+router.get('/', authenticate, authorize('ADMIN'), getUsers);
 router.post('/', authenticate, authorize('ADMIN'), createUser);
 
 /**
  * @swagger
  * /api/users/{id}:
  *   get:
- *     summary: Картка користувача за ID (потрібен токен)
+ *     summary: Картка користувача за ID (своя або адмін — повна; чужа — лише публічні поля без email/phone)
  *     tags: [Users]
  *     security:
  *       - bearerAuth: []

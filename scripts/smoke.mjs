@@ -81,8 +81,10 @@ async function main() {
   // захист маршрутів
   const noToken = await req('GET', '/api/users');
   check('GET /api/users без токена → 401', noToken.status === 401);
-  const users = await req('GET', '/api/users?page=1&limit=5', { token: clientToken });
-  check('GET /api/users з токеном → 200, пагінація, без паролів',
+  const usersClient = await req('GET', '/api/users', { token: clientToken });
+  check('GET /api/users клієнтом → 403 (email/телефони всіх бачить лише адмін)', usersClient.status === 403);
+  const users = await req('GET', '/api/users?page=1&limit=5', { token: adminToken });
+  check('GET /api/users адміном → 200, пагінація, без паролів',
     users.status === 200 && Array.isArray(users.body.data) && users.body.pagination && users.body.data.every((u) => u.password === undefined));
 
   // консультація: клієнт створює для себе
@@ -100,6 +102,17 @@ async function main() {
 
   const consNoToken = await req('POST', '/api/consultations', { body: { lawyerId: lawyer.user.id, topic: 'x', description: 'y' } });
   check('POST /api/consultations без токена → 401', consNoToken.status === 401);
+
+  const consPrice = await req('POST', '/api/consultations', {
+    token: clientToken,
+    body: {
+      lawyerId: lawyer.user.id,
+      topic: 'Спроба задати ціну самому',
+      description: 'Клієнт намагається передати власну ціну за консультацію.',
+      price: 0,
+    },
+  });
+  check('POST /api/consultations із price від клієнта → 403', consPrice.status === 403);
 
   const outsiderReg = await req('POST', '/api/auth/register', {
     body: { email: `out.${suffix}@example.com`, password: 'smokepassword123', name: 'Сторонній' },
@@ -127,7 +140,8 @@ async function main() {
   const form = new FormData();
   form.append('file', new Blob([png], { type: 'image/png' }), 'doc.png');
   const up = await req('POST', '/api/files/upload', { token: clientToken, form });
-  check('POST /api/files/upload (png) → 201', up.status === 201);
+  check('POST /api/files/upload (png) → 201, без server path у відповіді',
+    up.status === 201 && up.body.file?.path === undefined);
   const fileId = up.body.file?.id;
   if (fileId) {
     const getFile = await req('GET', `/api/files/${fileId}`);
@@ -137,6 +151,12 @@ async function main() {
   exeForm.append('file', new Blob([png], { type: 'application/x-msdownload' }), 'virus.exe');
   const badFile = await req('POST', '/api/files/upload', { token: clientToken, form: exeForm });
   check('POST /api/files/upload (.exe) → 400', badFile.status === 400);
+
+  // валідний .png за ім'ям/MIME, але всередині exe — відхиляє перевірка магічних байтів
+  const fakeForm = new FormData();
+  fakeForm.append('file', new Blob([Buffer.concat([Buffer.from('MZ\x90\x00'), Buffer.alloc(64)])], { type: 'image/png' }), 'fake.png');
+  const fakeFile = await req('POST', '/api/files/upload', { token: clientToken, form: fakeForm });
+  check('POST /api/files/upload (підроблений вміст) → 400 магічні байти', fakeFile.status === 400 && String(fakeFile.body.error).includes('магічних байтів'));
 
   // відгук після завершення
   await req('PUT', `/api/consultations/${consId}`, { token: lawyerToken, body: { status: 'COMPLETED' } });

@@ -94,8 +94,8 @@ export async function createLawyer(req, res) {
     isVerified: req.user.role === 'ADMIN' ? isVerified : false,
     specializations: { connect: specializationIds.map((id) => ({ id })) },
   });
-  // користувач із профілем юриста отримує роль LAWYER
-  await userModel.setRole(userId, 'LAWYER');
+  // роль LAWYER отримує лише колишній клієнт — адміністратора не знижуємо
+  if (user.role === 'CLIENT') await userModel.setRole(userId, 'LAWYER');
 
   res.status(201).json({ data: lawyer });
 }
@@ -146,7 +146,8 @@ export async function deleteLawyer(req, res) {
   const id = parseId(req.params.id, 'ідентифікатор профілю юриста');
   const lawyer = await assertCanManageLawyer(req, id);
   await lawyerModel.remove(lawyer.id);
-  // без профілю користувач знову стає клієнтом
-  await userModel.setRole(lawyer.userId, 'CLIENT');
+  // без профілю юрист стає клієнтом, але адміністратора не знижуємо
+  const user = await userModel.findById(lawyer.userId);
+  if (user?.role === 'LAWYER') await userModel.setRole(lawyer.userId, 'CLIENT');
   res.status(204).end();
 }

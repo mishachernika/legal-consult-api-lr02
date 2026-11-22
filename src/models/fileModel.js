@@ -1,6 +1,13 @@
 import { prisma } from '../db.js';
 
 export const fileModel = {
+  // відповідь клієнту без серверного шляху на диску
+  public: (file) => {
+    if (!file) return null;
+    const { path, ...rest } = file;
+    return rest;
+  },
+
   create: (data) => prisma.file.create({ data }),
 
   findById: (id) => prisma.file.findUnique({ where: { id } }),

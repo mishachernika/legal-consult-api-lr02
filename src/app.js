@@ -48,6 +48,18 @@ app.use(
 // Журнал дій користувачів (рівень 3): пишемо всі не-GET запити після відповіді
 app.use('/api/', audit());
 
+// Окремий посилений ліміт на auth-ендпоінти (login/register/refresh/2fa/...) — захист від перебору паролів
+app.use(
+  '/api/auth',
+  rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: Number(process.env.AUTH_RATE_LIMIT) || 10,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    message: { error: 'Забагато спроб входу або запитів. Спробуйте пізніше' },
+  })
+);
+
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/lawyers', lawyerRoutes);

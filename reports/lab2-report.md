@@ -29,7 +29,7 @@
 **Рівень 2** — виконано повністю:
 
 1. Файловий сервіс — Multer 2.x, `POST /api/files/upload` (один файл) та `/upload-multiple` (до 5), файли можна прикріпити до консультації.
-2. Валідація типів і розмірів — MIME-тип **і** розширення перевіряються разом (jpg/png/gif/webp/pdf), ліміт 5 МБ (`MAX_FILE_SIZE`), оригінальне ім'я ніколи не використовується як шлях на диску.
+2. Валідація типів і розмірів — MIME-тип **і** розширення перевіряються разом (jpg/png/gif/webp/pdf), ліміт 5 МБ (`MAX_FILE_SIZE`), оригінальне ім'я ніколи не використовується як шлях на диску; додатково перевіряються **«магічні байти»** вмісту (сигнатури jpeg/png/gif/webp/pdf), підроблений файл видаляється і повертається 400; у відповідях API серверний `path` не віддається.
 3. Пошук по основних сутностях — `?search=` (insensitive) для користувачів, юристів, консультацій.
 4. Фільтрація — роль, статус консультації, сфера права, діапазон ціни, мінімальний рейтинг; сортування з білим списком полів.
 5. Оновлення та видалення файлів — `DELETE /api/files/:id` (власник або ADMIN), файл видаляється і з диска; якщо запис у БД не вдався — «осиротілий» файл прибирається.
@@ -43,25 +43,25 @@
 2. Двофакторна автентифікація — TOTP (otplib) + QR-код: `/api/auth/2fa/enable → confirm → disable`, при login вимагається поле `totp`.
 3. OAuth — **не реалізовано** (див. висновки).
 4. Логування дій — middleware `audit()` пише всі не-GET запити в `AuditLog` (дія, сутність, id, замасковане тіло, IP); читати журнал може лише ADMIN (`GET /api/audit-logs`).
-5. Rate limiting — `express-rate-limit` на `/api/` (100 запитів / 15 хв з IP, перевірено: після ліміту → 429).
-6. Складніша система дозволів — правила на рівні контролерів: consultation редагують лише учасники (клієнт — лише PENDING і може скасувати; юрист — статус/час/ціну), чат пишуть лише учасники, відгук лишає лише клієнт завершеної консультації, `isVerified` ставить лише ADMIN тощо.
+5. Rate limiting — `express-rate-limit` на `/api/` (100 запитів / 15 хв з IP, перевірено: після ліміту → 429) **плюс окремий посилений ліміт на `/api/auth`** (10 запитів / 15 хв, `AUTH_RATE_LIMIT`) — захист від перебору паролів і кодів 2FA.
+6. Складніша система дозволів — правила на рівні контролерів: consultation редагують лише її учасники (клієнт — лише PENDING і може скасувати; **ціну при створенні задає лише адмін**, далі ціну змінює юрист), чат пишуть лише учасники, відгук лишає лише клієнт завершеної консультації, `isVerified` ставить лише ADMIN, список усіх користувачів з email/телефонами — лише ADMIN (чужа картка віддає лише публічні поля), видалення consultation з відгуком перераховує рейтинг юриста, створення профілю юриста не знижує роль ADMIN.
 7. Кілька файлів одночасно — `/api/files/upload-multiple` (до 5, поле `files[]`).
 8. Розширена документація — Swagger для всіх ендпоінтів із прикладами запитів, кодами відповідей (400/401/403/404/409) і схемою `bearerAuth`.
 
 ## 3. Хід роботи
 
 1. **Середовище.** Node.js 24 LTS, PostgreSQL 17 (порт 5433), окремі бази `legal_consult` і `legal_consult_test`. Проєкт — ES-модулі (`"type": "module"`), `dev` = `node --env-file=.env --watch src/server.js`, `test` = `node --env-file-if-exists=.env.test --test --test-concurrency=1 "tests/**/*.test.js"` (послідовний запуск файлів, бо кожен файл чистить тестову БД).
-2. **Залежності** (кíos 1 методички): `express@5`, `jsonwebtoken`, `argon2`, `multer@2`, `swagger-jsdoc`, `swagger-ui-express`, `helmet`, `express-rate-limit`, `cors`, `@prisma/client@7`, `@prisma/adapter-pg`, `pg`, `dotenv`; додатково для рівня 3: `otplib`, `qrcode`, `nodemailer`; dev: `prisma@7`, `supertest`.
+2. **Залежності** (крок 1 методички): `express@5`, `jsonwebtoken`, `argon2`, `multer@2`, `swagger-jsdoc`, `swagger-ui-express`, `helmet`, `express-rate-limit`, `cors`, `@prisma/client@7`, `@prisma/adapter-pg`, `pg`, `dotenv`; додатково для рівня 3: `otplib`, `qrcode`, `nodemailer`; dev: `prisma@7`, `supertest`.
 3. **Змінні середовища** — `.env` / `.env.test` (поза git), шаблони `.env.example` / `.env.test.example`: `DATABASE_URL`, `PORT`, `FRONTEND_URL`, `JWT_SECRET`, `JWT_EXPIRES_IN`, `REFRESH_TOKEN_SECRET`, `REFRESH_TOKEN_EXPIRES_IN`, `UPLOAD_DIR`, `MAX_FILE_SIZE`, `RATE_LIMIT`, опціонально `SMTP_URL`. Секрети згенеровано `node -p "require('node:crypto').randomBytes(32).toString('hex')"`.
 4. **Схема БД** — розширено до 10 моделей (див. розділ 4), міграція `add-auth-files-audit`, `npx prisma generate` (Prisma 7 генерує клієнт у `src/generated/prisma` окремою командою).
 5. **Утиліти** — `src/utils/jwt.js` (access/refresh, у refresh є `jti`), `password.js` (Argon2id), `pagination.js`, `totp.js` (обгортка otplib v13), `email.js` (nodemailer, dev-fallback у консоль).
 6. **Middleware** — `auth.js` (Bearer → `req.user`), `authorize.js` (ролі), `upload.js` (Multer: mime+ext, 5 МБ, до 5 файлів), `audit.js` (запис у `AuditLog` після відповіді, чутливі поля маскуються `***`), у `errorHandler.js` додано гілки MulterError (зокрема `LIMIT_FILE_SIZE` → «Файл занадто великий») і `err.status`.
 7. **Auth-контролер** — register/login/refresh/logout/sessions/me/change-password/forgot/reset-password/2fa. Refresh зберігається лише як SHA-256 хеш; ротація + виявлення повторного використання відкликаного токена (відкликання всіх сесій). Відповідь на login завжди однакова для невідомого email і хибного пароля.
 8. **Файловий сервіс** — `fileController`: upload/upload-multiple/get/getMy/getConsultationFiles/delete; перевірка прав на консультацію при прикріпленні.
-9. **Захист предметних ендпоінтів** — усі списки з пагінацією, пошуком і фільтрами; правила доступу в контролерах (власник/учасник/ADMIN, див. розділ 2 рівень 3 п.6).
+9. **Захист предметних ендпоінтів** — усі списки з пагінацією, пошуком і фільтрами; правила доступу в контролерах (власник/учасник/ADMIN, див. розділ 2 рівень 3 п.6); додатковий ліміт на `/api/auth` у `app.js`.
 10. **Безпека застосунку** — `app.js`: helmet (CSP вимкнено для Swagger UI), CORS із `credentials: true` і `FRONTEND_URL`, rate limit на `/api/`, audit на `/api/`, `express.json({ limit: '1mb' })`.
 11. **Swagger** — теги Authentication/Files/Audit, `bearerAuth` security scheme, всі ендпоінти задокументовані.
-12. **Тести** — `tests/auth.test.js` (12), `tests/files.test.js` (5), `tests/api.test.js` (25) + `helpers.js`; усього **42 тести, усі green**. `scripts/smoke.mjs` — **29/29 PASS** проти живого сервера; `scripts/curl-demo.sh` — curl-сесія для скріншотів. CI `.github/workflows/tests.yml` — Node 24 + PostgreSQL 17, секрети у env, `npm test`.
+12. **Тести** — `tests/auth.test.js` (12), `tests/files.test.js` (6), `tests/api.test.js` (29) + `helpers.js`; усього **47 тестів, усі green**. `scripts/smoke.mjs` — **32/32 PASS** проти живого сервера; `scripts/curl-demo.sh` — curl-сесія для скріншотів. CI `.github/workflows/tests.yml` — Node 24 + PostgreSQL 17, секрети у env, `npm test`.
 
 ## 4. Схема бази даних
 
@@ -183,6 +183,8 @@ export function parsePagination(query, { defaultLimit = 10, maxLimit = 100 } = {
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors({ origin: process.env.FRONTEND_URL || 'http://localhost:5173', credentials: true }));
 app.use('/api/', rateLimit({ windowMs: 15 * 60 * 1000, limit: Number(process.env.RATE_LIMIT) || 100, … }));
+// окремий посилений ліміт на auth (login/2FA/...) — захист від перебору
+app.use('/api/auth', rateLimit({ windowMs: 15 * 60 * 1000, limit: Number(process.env.AUTH_RATE_LIMIT) || 10, … }));
 app.use('/api/', audit()); // журнал дій у AuditLog
 ```
 
@@ -194,12 +196,13 @@ app.use('/api/', audit()); // журнал дій у AuditLog
 |---|---|
 | `lab2-swagger.png` | Swagger UI на `/api-docs` — групи Authentication, Users, Lawyers, Consultations, Reviews, Files, Audit (справжній скріншот headless Chrome) |
 | `lab2-terminal-curl.png` | **справжній знімок екрана вікна Terminal.app** (`screencapture -l<window id>`): `scripts/curl-demo.sh` — health, каталог юристів із пагінацією, реєстрація (пара JWT у відповіді), вхід і запит із `Bearer`-токеном, 401 без токена, валідація → 400, 404 |
-| `lab2-terminal-npm-test.png` | **знімок вікна Terminal.app**: `npm test` — **tests 42, pass 42, fail 0** |
-| `lab2-terminal-smoke.png` | **знімок вікна Terminal.app**: `node scripts/smoke.mjs` — **29/29 PASS** (реєстрація, ротація refresh, 401 без токена, консультація, чат, файли, відгук, аудит) |
+| `lab2-terminal-npm-test.png` | **знімок вікна Terminal.app**: `npm test` — **tests 47, pass 47, fail 0** |
+| `lab2-terminal-smoke.png` | **знімок вікна Terminal.app**: `node scripts/smoke.mjs` — **32/32 PASS** (реєстрація, ротація refresh, 401/403 без прав, ціна лише для адміна, консультація, чат, файли + магічні байти, відгук, аудит) |
 | `lab2-smoke.txt`, `lab2-npm-test.txt`, `lab2-curl-session.txt` | ті самі виводи текстом |
-| `lab2-rate-limit.txt` | демонстрація rate limiting: 105 запитів до `/api/specializations` → 58×200 і 47×429 `{"error":"Забагато запитів з цієї IP-адреси, спробуйте пізніше"}` (ліміт 100 за вікно 15 хв, частину «з'їли» попередні демо-запити) |
+| `lab2-rate-limit.txt` | rate limiting на `/api/`: 105 запитів до `/api/specializations` → 58×200 і 47×429 (ліміт 100 за вікно 15 хв, частину «з'їли» попередні демо-запити) |
+| `lab2-auth-rate-limit.txt` | окремий ліміт на `/api/auth` (`AUTH_RATE_LIMIT=10`): 12 спроб login → 10×401 і далі 429 `{"error":"Забагато спроб входу або запитів. Спробуйте пізніше"}` |
 
-Тести: `npm test` → `tests 42, pass 42, fail 0` (auth: реєстрація/вхід/ротація/reuse-detection/logout/change+reset password/2FA; files: upload png, відхилення .exe і завеликого, multi-upload, права доступу; API: захищені маршрути, пагінація, пошук, фільтри, RBAC-правила, аудит, помилки). Тести женуться проти окремої БД `legal_consult_test` (`NODE_ENV=test`, `.env.test`), файли запускаються послідовно (`--test-concurrency=1`), бо кожен чистить базу.
+Тести: `npm test` → `tests 47, pass 47, fail 0` (auth: реєстрація/вхід/ротація/reuse-detection/logout/change+reset password/2FA; files: upload png, відхилення .exe і завеликого, multi-upload, права доступу; API: захищені маршрути, пагінація, пошук, фільтри, RBAC-правила, аудит, помилки). Тести женуться проти окремої БД `legal_consult_test` (`NODE_ENV=test`, `.env.test`), файли запускаються послідовно (`--test-concurrency=1`), бо кожен чистить базу.
 
 Приклади запитів (curl):
 
@@ -231,7 +234,7 @@ curl -X POST localhost:3000/api/files/upload -H "Authorization: Bearer $TOKEN" \
 3. **Argon2id vs SHA-256.** SHA-256 швидкий — пароль можна перебирати на GPU мільярдами в секунду. Argon2id навмисне повільний і вимогливий до пам'яті (параметри m/t/p у самому хеші), тому атака перебором стає дорогою; OWASP рекомендує його першим вибором. **Сіль** — унікальний випадковий рядок на пароль, зберігається всередині хешу (`$argon2id$…$сіль$хеш`); завдяки солі однакові паролі дають різні хеші, і не потрібні rainbow tables.
 4. **Middleware в Express** — функція `(req, res, next)` у ланцюжку обробки. У нас: `authenticate` читає заголовок `Authorization: Bearer …`, перевіряє підпис JWT і кладе payload у `req.user`; `authorize(...roles)` порівнює `req.user.role` зі списком дозволених ролей і або пускає далі (`next()`), або повертає 401/403. Так кожен захищений маршрут — просто `router.get('/', authenticate, getUsers)`.
 5. **RBAC** — модель, де права прив'язані до ролей, а ролі — до користувачів. У проєкті enum `Role { CLIENT, LAWYER, ADMIN }` у `User`; `authorize('ADMIN')` на маршрутах адміна (наприклад, `DELETE /api/users/:id`), а детальніші правила — в контролерах: власник профілю редагує лише свій, клієнт консультації бачить лише свої консультації, `isVerified` підтверджує лише адмін.
-6. **Multer** — middleware для `multipart/form-data`. У нас: `diskStorage` з унікальним ім'ям (`fieldname-timestamp-random.ext`, оригінальне ім'я не використовується), `fileFilter` перевіряє, що MIME-тип і розширення відповідають одне одному (обидва легко підробити з клієнта, тому перевіряємо разом), `limits: { fileSize: 5 МБ, files: 5 }`. Помилки Multer ловить централізований `errorHandler` (`LIMIT_FILE_SIZE` → 400 «Файл занадто великий»).
+6. **Multer** — middleware для `multipart/form-data`. У нас: `diskStorage` з унікальним ім'ям (`fieldname-timestamp-random.ext`, оригінальне ім'я не використовується), `fileFilter` перевіряє, що MIME-тип і розширення відповідають одне одному (обидва легко підробити з клієнта, тому перевіряємо разом), `limits: { fileSize: 5 МБ, files: 5 }`; додатково у контролері перевіряються «магічні байти» (сигнатура вмісту), підроблений файл видаляється з диска. Помилки Multer ловить централізований `errorHandler` (`LIMIT_FILE_SIZE` → 400 «Файл занадто великий»).
 7. **Пагінація** — параметри `page` (≥1) і `limit` (1…100, за замовчуванням 10); у Prisma це `skip = (page-1)*limit`, `take = limit` разом із паралельним `count` для `total`. Відповідь: `{ data, pagination: { page, limit, total, totalPages, hasMore } }`. Обмеження `limit` захищає від виборки всієї таблиці одним запитом.
 8. **Swagger** — інструменти для документації REST API за специфікацією OpenAPI. У нас swagger-jsdoc збирає специфікацію з JSDoc-коментарів у `src/routes/*.js`, swagger-ui-express віддає інтерактивний UI на `/api-docs` — можна виконувати запити прямо з браузера (кнопка Authorize → Bearer токен). Перевага: документація живе в коді й не розходиться з реальністю.
 9. **Загрози вебдодатків** (OWASP Top 10) і як мінімізовано: підбір паролів — Argon2id + однакова відповідь login на невідомий email/хибний пароль; викрадення сесій — короткий access токен + refresh у БД лише хешем із ротацією та відкликанням; XSS/CSRF — helmet, CORS лише для свого origin, токени в заголовку, а не в cookie; зловживання API — rate limiting 100/15 хв; витік секретів — `.env` поза git, секрети 64 hex; ін'єкції — параметризовані запити Prisma; завантаження шкідливих файлів — перевірка mime+ext, ліміт розміру, унікальні імена без шляху від клієнта.
@@ -241,4 +244,4 @@ curl -X POST localhost:3000/api/files/upload -H "Authorization: Bearer $TOKEN" \
 
 Розширено API платформи юридичних консультацій до рівня «продакшн-близької» безпеки: Argon2id для паролів, пара JWT access/refresh із ротацією та відкликанням (у БД — лише хеші), RBAC із middleware і детальними правилами в контролерах, файловий сервіс із валідацією типу/розміру, пагінація/пошук/фільтри для всіх списків, Swagger-документація, а з рівня 3 — відновлення паролю через email, TOTP-2FA з QR-кодом, rate limiting, журнал дій (audit log) і multi-upload. OAuth-соцмережі свідомо не реалізовано: для локальної розробки потрібні реєстрація додатку в провайдера та публічний callback-URL; механізм розширюється стандартно (окремий роут + обмін code на токен провайдера), тому це заплановано як наступне покращення.
 
-Усі 42 інтеграційні тести green (`npm test`), smoke 29/29 проти живого сервера, CI у GitHub Actions на Node 24 + PostgreSQL 17. Rate limiting перевірено на практиці: після 100 запитів з одного IP за 15 хв API повертає 429.
+Усі 47 інтеграційних тестів green (`npm test`), smoke 32/32 проти живого сервера, CI у GitHub Actions на Node 24 + PostgreSQL 17. Rate limiting перевірено на практиці: після 100 запитів з одного IP за 15 хв API повертає 429.

@@ -30,6 +30,8 @@ describe('Files API', () => {
     assert.equal(ok.status, 201);
     const fileId = ok.body.file.id;
     assert.equal(ok.body.file.uploadedBy, owner.id);
+    // серверний шлях на диску не віддаємо
+    assert.equal(ok.body.file.path, undefined);
 
     // отримати файл може будь-хто (публічний ендпоінт)
     const get = await request(app).get(`/api/files/${fileId}`);
@@ -67,6 +69,22 @@ describe('Files API', () => {
       .attach('file', Buffer.alloc(5 * 1024 * 1024 + 1), { filename: 'big.png', contentType: 'image/png' });
     assert.equal(big.status, 400);
     assert.equal(big.body.error, 'Файл занадто великий');
+  });
+
+  test('підроблений вміст: .png із начинкою exe → 400 (магічні байти)', async () => {
+    const u = await registerUser('CLIENT', { email: 'files-magic@example.com' });
+    const exeContent = Buffer.concat([Buffer.from('MZ\x90\x00\x03\x00\x00\x00'), Buffer.alloc(64)]);
+
+    const res = await request(app)
+      .post('/api/files/upload')
+      .set(u.auth)
+      .attach('file', exeContent, { filename: 'fake.png', contentType: 'image/png' });
+    assert.equal(res.status, 400);
+    assert.ok(res.body.error.includes('магічних байтів'));
+
+    // у відповіді /my порожньо — файл не зберігся
+    const my = await request(app).get('/api/files/my').set(u.auth);
+    assert.equal(my.body.pagination.total, 0);
   });
 
   test('upload-multiple: кілька файлів одразу (files[]), /my повертає пагінований список', async () => {

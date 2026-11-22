@@ -43,3 +43,29 @@ export const upload = multer({
     files: 5,
   },
 });
+
+// «Магічні байти»: MIME-тип і ім'я файлу надходять від клієнта і їх легко підробити,
+// тому додатково перевіряємо сигнатуру вмісту (перші байти файлу)
+const MAGIC_SIGNATURES = new Map([
+  ['image/jpeg', [0xff, 0xd8, 0xff]],
+  ['image/png', [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]],
+  ['image/gif', [0x47, 0x49, 0x46, 0x38]], // 'GIF8'
+  ['application/pdf', [0x25, 0x50, 0x44, 0x46]], // '%PDF'
+]);
+
+export function hasValidMagicBytes(filePath, mimetype) {
+  const fd = fs.openSync(filePath, 'r');
+  try {
+    const buf = Buffer.alloc(12);
+    const n = fs.readSync(fd, buf, 0, 12, 0);
+    if (mimetype === 'image/webp') {
+      // RIFF....WEBP
+      return n >= 12 && buf.subarray(0, 4).toString('latin1') === 'RIFF' && buf.subarray(8, 12).toString('latin1') === 'WEBP';
+    }
+    const signature = MAGIC_SIGNATURES.get(mimetype);
+    if (!signature) return false;
+    return n >= signature.length && signature.every((byte, i) => buf[i] === byte);
+  } finally {
+    fs.closeSync(fd);
+  }
+}

@@ -21,6 +21,7 @@ jobs:
       UPLOAD_DIR: uploads
       MAX_FILE_SIZE: 5242880
       RATE_LIMIT: 100000
+      AUTH_RATE_LIMIT: 100000
     services:
       postgres:
         image: postgres:17

@@ -7,7 +7,7 @@ import { parsePagination, paginate } from '../utils/pagination.js';
 
 const ROLES = 'CLIENT,LAWYER,ADMIN';
 
-// Список користувачів: лише для автентифікованих, з пагінацією, пошуком і фільтром за роллю
+// Список користувачів (email/телефони всіх бачить лише адмін — тому й authorize('ADMIN') у роуті)
 export async function getUsers(req, res) {
   const { role, search } = req.query;
   if (role && !ROLES.split(',').includes(role)) {
@@ -30,6 +30,14 @@ export async function getUserById(req, res) {
   const id = parseId(req.params.id, 'ідентифікатор користувача');
   const user = await userModel.findById(id);
   if (!user) throw new AppError(404, 'Користувача не знайдено');
+
+  const isAdmin = req.user.role === 'ADMIN';
+  const isSelf = req.user.userId === id;
+  if (!isAdmin && !isSelf) {
+    // чужа картка: лише публічні поля, без email/phone
+    const { id: uid, name, role, avatar, createdAt, lawyerProfile } = user;
+    return res.json({ data: { id: uid, name, role, avatar, createdAt, lawyerProfile } });
+  }
   res.json({ data: userModel.public(user) });
 }
 

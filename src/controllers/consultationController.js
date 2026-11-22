@@ -1,6 +1,7 @@
 import { consultationModel } from '../models/consultationModel.js';
 import { userModel } from '../models/userModel.js';
 import { lawyerModel } from '../models/lawyerModel.js';
+import { reviewModel } from '../models/reviewModel.js';
 import { AppError } from '../utils/AppError.js';
 import { assertValid } from '../utils/validate.js';
 import { parseId } from '../utils/params.js';
@@ -60,9 +61,11 @@ export async function getConsultationById(req, res) {
   res.json({ data: consultation });
 }
 
-// Клієнт створює запит на консультацію для себе; адмін — для будь-якого клієнта
+// Клієнт створює запит на консультацію для себе; адмін — для будь-якого клієнта.
+// Ціну при створенні може задати лише адміністратор (інакше — ставка юриста; далі ціну змінює юрист)
 export async function createConsultation(req, res) {
-  const clientId = req.user.role === 'ADMIN' ? req.body?.clientId : req.user.userId;
+  const isAdmin = req.user.role === 'ADMIN';
+  const clientId = isAdmin ? req.body?.clientId : req.user.userId;
   assertValid({ ...req.body, clientId }, {
     clientId: ['required', 'positiveInt'],
     lawyerId: ['required', 'positiveInt'],
@@ -72,6 +75,10 @@ export async function createConsultation(req, res) {
     price: ['nonNegativeNumber'],
   });
   const { lawyerId, topic, description, scheduledAt, price } = req.body;
+
+  if (price !== undefined && !isAdmin) {
+    throw new AppError(403, 'Ціну консультації встановлює лише юрист або адміністратор');
+  }
 
   const client = await userModel.findById(clientId);
   if (!client) throw new AppError(404, 'Клієнта не знайдено');
@@ -85,7 +92,7 @@ export async function createConsultation(req, res) {
     topic,
     description,
     scheduledAt: scheduledAt ? new Date(scheduledAt) : undefined,
-    // якщо ціну не передано, беремо погодинну ставку юриста
+    // якщо адмін ціну не передав, беремо погодинну ставку юриста
     price: price ?? lawyerProfile.pricePerHour,
   });
   res.status(201).json({ data: consultation });
@@ -154,10 +161,18 @@ export async function updateConsultation(req, res) {
   res.json({ data: updated });
 }
 
+// Перерахунок середнього рейтингу юриста після видалення відгуку (каскад)
+async function recalcLawyerRatingSafe(lawyerId) {
+  const profile = await lawyerModel.findByUserId(lawyerId);
+  if (!profile) return;
+  const avg = await reviewModel.avgRating(lawyerId);
+  await lawyerModel.setRatingByUserId(lawyerId, avg);
+}
+
 // Видалення: адмін завжди, клієнт — лише власну consultation у статусі PENDING
 export async function deleteConsultation(req, res) {
   const id = parseId(req.params.id, 'ідентифікатор консультації');
-  const consultation = await consultationModel.findByIdCore(id);
+  const consultation = await consultationModel.findByIdWithReview(id);
   if (!consultation) throw new AppError(404, 'Консультацію не знайдено');
 
   const isAdmin = req.user.role === 'ADMIN';
@@ -166,6 +181,8 @@ export async function deleteConsultation(req, res) {
     throw new AppError(403, 'Лише адміністратор або клієнт (до підтвердження) може видалити консультацію');
   }
 
-  await consultationModel.remove(id);
+  await consultationModel.remove(id); // відгук видалиться каскадом
+  // але рейтинг юриста треба перерахувати вручну
+  if (consultation.review) await recalcLawyerRatingSafe(consultation.lawyerId);
   res.status(204).end();
 }

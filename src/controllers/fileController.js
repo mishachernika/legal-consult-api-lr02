@@ -2,9 +2,18 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileModel } from '../models/fileModel.js';
 import { consultationModel } from '../models/consultationModel.js';
+import { hasValidMagicBytes } from '../middleware/upload.js';
 import { AppError } from '../utils/AppError.js';
 import { parsePagination, paginate } from '../utils/pagination.js';
 import { parseId } from '../utils/params.js';
+
+// Перевірка сигнатури вмісту; при невдачі файл прибираємо з диска
+async function assertMagicBytes(file) {
+  if (!hasValidMagicBytes(file.path, file.mimetype)) {
+    await fs.unlink(file.path).catch(() => {});
+    throw new AppError(400, 'Вміст файлу не відповідає заявленому типу (перевірка магічних байтів)');
+  }
+}
 
 // Якщо файл прив'язується до консультації — перевіряємо, що користувач її учасник (або ADMIN)
 async function assertCanAttachToConsultation(consultationId, user) {
@@ -36,9 +45,11 @@ export async function uploadFile(req, res) {
     await assertCanAttachToConsultation(consultationId, req.user);
   }
 
+  await assertMagicBytes(req.file);
+
   try {
     const file = await fileModel.create(fileData(req, { consultationId }));
-    res.status(201).json({ message: 'Файл успішно завантажено', file });
+    res.status(201).json({ message: 'Файл успішно завантажено', file: fileModel.public(file) });
   } catch (error) {
     // Якщо запис у БД не вдався, не залишаємо «осиротілий» файл на диску
     await fs.unlink(req.file.path).catch(() => {});
@@ -61,10 +72,11 @@ export async function uploadMultipleFiles(req, res) {
   for (const f of req.files) {
     const singleReq = { ...req, file: f };
     try {
-      files.push(await fileModel.create(fileData(singleReq, { consultationId })));
+      await assertMagicBytes(f);
+      files.push(fileModel.public(await fileModel.create(fileData(singleReq, { consultationId }))));
     } catch (error) {
       await fs.unlink(f.path).catch(() => {});
-      errors.push({ originalName: f.originalname, error: 'Не вдалося зберегти файл' });
+      errors.push({ originalName: f.originalname, error: error.message ?? 'Не вдалося зберегти файл' });
     }
   }
 
@@ -81,7 +93,7 @@ export async function getFile(req, res) {
 export async function getMyFiles(req, res) {
   const { page, limit, skip, take } = parsePagination(req.query);
   const { items, total } = await fileModel.findPage({ uploadedBy: req.user.userId }, { skip, take });
-  res.json(paginate(items, total, { page, limit }));
+  res.json(paginate(items.map(fileModel.public), total, { page, limit }));
 }
 
 export async function getConsultationFiles(req, res) {
@@ -91,7 +103,8 @@ export async function getConsultationFiles(req, res) {
   if (req.user.role !== 'ADMIN' && consultation.clientId !== req.user.userId && consultation.lawyerId !== req.user.userId) {
     throw new AppError(403, 'Лише учасники консультації бачать її файли');
   }
-  res.json({ data: await fileModel.findAll({ consultationId }) });
+  const files = await fileModel.findAll({ consultationId });
+  res.json({ data: files.map(fileModel.public) });
 }
 
 export async function deleteFile(req, res) {
