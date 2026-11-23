@@ -45,7 +45,7 @@ describe('Files API', () => {
     // власник може
     const del = await request(app).delete(`/api/files/${fileId}`).set(owner.auth);
     assert.equal(del.status, 200);
-    assert.equal((await request(app).get(`/api/files/${fileId}`)).status, 404);
+    assert.equal((await request(app).get(`/api/files/${fileId}`).set(owner.auth)).status, 404);
   });
 
   test('.exe відхиляється (MIME + розширення), завеликий файл → 400 «Файл занадто великий»', async () => {
