@@ -40,7 +40,7 @@ Node.js 24 · Express 5 · PostgreSQL · Prisma 7 · JWT (jsonwebtoken) · Argon
 
 ## База даних
 
-9 таблиць: `User`, `LawyerProfile`, `Specialization`, `Consultation`, `Message`, `Review`, `File`, `RefreshToken`, `PasswordResetToken`, `AuditLog`. У `User` — хеш пароля й TOTP-секрет; токени зберігаються лише у вигляді SHA-256 хешів.
+10 доменних моделей: `User`, `LawyerProfile`, `Specialization`, `Consultation`, `Message`, `Review`, `File`, `RefreshToken`, `PasswordResetToken`, `AuditLog`. Prisma також створює службову проміжну таблицю для зв'язку M:N між профілями юристів і спеціалізаціями. У `User` — хеш пароля й TOTP-секрет; токени зберігаються лише у вигляді SHA-256 хешів.
 
 ## Як запустити у себе
 
@@ -111,7 +111,7 @@ npm run dev                   # сервер з автоперезапуском
 | GET, PUT, DELETE | `/api/reviews/:id` | публічний / власник+ADMIN | картка / оновити / видалити |
 | POST | `/api/files/upload` · `/api/files/upload-multiple` | токен | завантажити 1 файл / до 5 (multipart) |
 | GET | `/api/files/my` · `/api/files/consultation/:id` | токен | мої файли (пагінація) / файли консультації |
-| GET, DELETE | `/api/files/:id` | публічний / власник+ADMIN | скачати / видалити файл |
+| GET, DELETE | `/api/files/:id` | власник, учасник консультації або ADMIN / власник+ADMIN | скачати / видалити файл |
 | GET | `/api/audit-logs` | ADMIN | журнал дій із пагінацією і фільтрами |
 
 Детальні описи з прикладами — у Swagger UI.
