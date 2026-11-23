@@ -87,6 +87,22 @@ export async function getFile(req, res) {
   const id = parseId(req.params.id, 'ідентифікатор файлу');
   const file = await fileModel.findById(id);
   if (!file) throw new AppError(404, 'Файл не знайдено');
+
+  // Документи юридичних консультацій можуть містити персональні та конфіденційні дані.
+  // Власник бачить свій файл, а файл консультації — ще й її учасники та адміністратор.
+  const isOwner = file.uploadedBy === req.user.userId;
+  const isAdmin = req.user.role === 'ADMIN';
+  let isParticipant = false;
+  if (file.consultationId) {
+    const consultation = await consultationModel.findByIdCore(file.consultationId);
+    isParticipant =
+      consultation &&
+      (consultation.clientId === req.user.userId || consultation.lawyerId === req.user.userId);
+  }
+  if (!isOwner && !isAdmin && !isParticipant) {
+    throw new AppError(403, 'Ви не маєте прав для завантаження цього файлу');
+  }
+
   res.sendFile(path.resolve(file.path));
 }
 

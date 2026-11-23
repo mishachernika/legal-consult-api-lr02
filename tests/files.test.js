@@ -19,7 +19,7 @@ describe('Files API', () => {
     assert.equal((await request(app).post('/api/files/upload')).status, 401);
   });
 
-  test('завантаження PNG → 201, отримання файлу → 200, чужий delete → 403, свій → 200', async () => {
+  test('завантаження PNG → 201, доступ до файлу лише для власника, чужий delete → 403, свій → 200', async () => {
     const owner = await registerUser('CLIENT', { email: 'files-owner@example.com' });
     const other = await registerUser('CLIENT', { email: 'files-other@example.com' });
 
@@ -33,9 +33,10 @@ describe('Files API', () => {
     // серверний шлях на диску не віддаємо
     assert.equal(ok.body.file.path, undefined);
 
-    // отримати файл може будь-хто (публічний ендпоінт)
-    const get = await request(app).get(`/api/files/${fileId}`);
-    assert.equal(get.status, 200);
+    // файл не є публічним: без токена — 401, для іншого користувача — 403
+    assert.equal((await request(app).get(`/api/files/${fileId}`)).status, 401);
+    assert.equal((await request(app).get(`/api/files/${fileId}`).set(other.auth)).status, 403);
+    assert.equal((await request(app).get(`/api/files/${fileId}`).set(owner.auth)).status, 200);
 
     // чужий користувач не може видалити
     const forbidden = await request(app).delete(`/api/files/${fileId}`).set(other.auth);
@@ -150,6 +151,7 @@ describe('Files API', () => {
       .attach('file', png, { filename: 'dogovir.png', contentType: 'image/png' });
     assert.equal(ok.status, 201);
     assert.equal(ok.body.file.consultationId, cid);
+    const fileId = ok.body.file.id;
 
     const asClient = await request(app).get(`/api/files/consultation/${cid}`).set(client.auth);
     assert.equal(asClient.status, 200);
@@ -157,5 +159,10 @@ describe('Files API', () => {
 
     const asOutsider = await request(app).get(`/api/files/consultation/${cid}`).set(outsider.auth);
     assert.equal(asOutsider.status, 403);
+
+    // Документ консультації доступний обом її учасникам, але не сторонньому користувачу.
+    assert.equal((await request(app).get(`/api/files/${fileId}`).set(client.auth)).status, 200);
+    assert.equal((await request(app).get(`/api/files/${fileId}`).set(lawyerUser.auth)).status, 200);
+    assert.equal((await request(app).get(`/api/files/${fileId}`).set(outsider.auth)).status, 403);
   });
 });
